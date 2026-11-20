@@ -1,0 +1,11 @@
+services:
+  popsnap-remote:
+    build: .
+    container_name: popsnap-remote
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8090:8090"   # diteruskan oleh nginx / Caddy / Cloudflare Tunnel (HTTPS)
+    volumes:
+      - ./data:/data
+    mem_limit: 256m

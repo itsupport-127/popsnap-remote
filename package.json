@@ -1,0 +1,9 @@
+{
+  "name": "popsnap-remote",
+  "version": "1.0.0",
+  "description": "POPSNAP Remote Booth: pantau & kendalikan semua booth dari satu halaman web ringan (tanpa build, tanpa port masuk di booth)",
+  "main": "src/server.js",
+  "engines": { "node": ">=22.5.0" },
+  "scripts": { "start": "node --disable-warning=ExperimentalWarning src/server.js", "test": "node --disable-warning=ExperimentalWarning test/run.js" },
+  "dependencies": { "express": "^5.2.1" }
+}
