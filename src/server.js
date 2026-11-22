@@ -11,7 +11,7 @@ const ONLINE_MS = (Number(process.env.ONLINE_SEC) || 35) * 1000;
 const POLL_WAIT_MS = 25 * 1000;
 const CMD_PENDING_TTL = 10 * 60 * 1000;  // perintah belum diambil booth (offline) -> kedaluwarsa
 const CMD_SENT_TTL = 2 * 60 * 1000;      // sudah diambil tapi tak ada konfirmasi -> kedaluwarsa
-const COMMANDS = ["lock", "unlock", "cancel_session", "reload_ui", "settings.patch", "ping"];
+const COMMANDS = ["lock", "unlock", "cancel_session", "reload_ui", "settings.patch", "ping", ...spec.TOOL_TYPES];
 
 const app = express();
 app.disable("x-powered-by");
@@ -109,7 +109,7 @@ function boothView(b) {
 }
 const getBooth = (id) => db.prepare("SELECT * FROM booths WHERE id=?").get(Number(id));
 
-app.get("/api/spec", admin, (req, res) => res.json({ groups: spec.GROUPS }));
+app.get("/api/spec", admin, (req, res) => res.json({ sections: spec.SECTIONS }));
 app.get("/api/booths", admin, (req, res) => {
   const list = db.prepare("SELECT * FROM booths ORDER BY name COLLATE NOCASE").all().map(boothView);
   const total = list.reduce((a, b) => ({ count: a.count + (b.today.count || 0), revenue: a.revenue + (b.today.revenue || 0) }), { count: 0, revenue: 0 });
@@ -186,6 +186,10 @@ app.post("/api/booths/:id/commands", admin, sameOrigin, (req, res) => {
     payload = { patch: v.clean };
   } else if (type === "lock") {
     payload = { message: String(payload?.message ?? "").trim().slice(0, 120) };
+  } else if (spec.TOOL_TYPES.includes(type)) {
+    const v = spec.validateTool(type, payload);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    payload = v.payload;
   } else payload = null;
   const r = db.prepare("INSERT INTO commands (booth_id, type, payload, created_at, by) VALUES (?,?,?,?,?)").run(b.id, type, j(payload), now(), req.admin.user);
   wake(b.id); emit(b.id, "cmd");
@@ -258,7 +262,10 @@ app.get("/api/agent/poll", agent, (req, res) => {
 app.post("/api/agent/ack", agent, (req, res) => {
   const id = Number(req.body?.id);
   const ok = !!req.body?.ok;
-  const result = { message: s(req.body?.message, 300), applied: req.body?.applied ?? null, error: s(req.body?.error, 300) };
+  // data = hasil alat (mis. ukuran penyimpanan, daftar setelan kamera); dibatasi supaya tabel perintah tidak membengkak
+  let data = req.body?.data ?? null;
+  if (data != null) { const raw = JSON.stringify(data); data = raw.length <= 30000 ? data : null; }
+  const result = { message: s(req.body?.message, 300), applied: req.body?.applied ?? null, error: s(req.body?.error, 300), data };
   const r = db.prepare("UPDATE commands SET status=?, result=?, done_at=? WHERE id=? AND booth_id=?").run(ok ? "done" : "error", j(result), now(), id, req.booth.id);
   emit(req.booth.id, "cmd");
   res.json({ ok: !!r.changes });

@@ -26,6 +26,28 @@ const ok = (name) => console.log("  ✓ " + name) || n++;
   assert.ok(!spec.validatePatch({ "printing.copies": 99 }).ok); ok("spec: di luar batas ditolak");
   assert.ok(!spec.validatePatch({ "printing.auto": "ya" }).ok); ok("spec: tipe salah ditolak");
   assert.deepStrictEqual(spec.unflatten({ "a.b.c": 1, "a.d": 2 }), { a: { b: { c: 1 }, d: 2 } }); ok("spec: unflatten");
+  // --- spec: cakupan baru ---
+  assert.ok(Object.keys(spec.FIELDS).length >= 150); ok("spec: >150 pengaturan bisa diatur dari remote");
+  for (const bad of ["payment.cloud.url", "payment.cloud.token", "payment.cloud.galleryUrl", "payment.cloud.studioCode", "payment.qris.simulate", "payment.qris.provider", "payment.qris.doku.secretKey", "payment.pos.apiKey",
+    "general.security.pin", "general.dataDir", "general.export.dir", "camera.dslr.host", "camera.videoDeviceId", "printing.main.name", "remote.url", "remote.token", "remote.enabled"])
+    assert.ok(!spec.validatePatch({ [bad]: "x" }).ok, bad);
+  ok("spec: rahasia, sinkron kasir/galeri/remote, folder & perangkat TETAP ditolak");
+  assert.ok(spec.validatePatch({ "general.flow.steps": ["payment", "template", "disclaimer", "consent", "reminder"] }).ok); ok("spec: urutan alur sah");
+  assert.ok(!spec.validatePatch({ "general.flow.steps": ["payment", "template"] }).ok);
+  assert.ok(!spec.validatePatch({ "general.flow.steps": ["payment", "payment", "disclaimer", "consent", "reminder"] }).ok);
+  assert.ok(!spec.validatePatch({ "general.flow.steps": ["x", "template", "disclaimer", "consent", "reminder"] }).ok); ok("spec: alur harus memuat semua langkah tepat sekali");
+  assert.deepStrictEqual(spec.validatePatch({ "animated.secondsBefore": "2.54" }).clean, { "animated.secondsBefore": 2.5 }); ok("spec: angka desimal dibulatkan 1 digit");
+  assert.ok(spec.validatePatch({ "printing.main.scaleY": 0 }).ok && spec.validatePatch({ "printing.main.scaleY": 80 }).ok && !spec.validatePatch({ "printing.main.scaleY": 20 }).ok); ok("spec: skala vertikal 0 atau 50–150");
+  assert.deepStrictEqual(spec.validatePatch({ "camera.liveView.rotation": "90" }).clean, { "camera.liveView.rotation": 90 });
+  assert.ok(!spec.validatePatch({ "camera.liveView.rotation": 45 }).ok && !spec.validatePatch({ "camera.liveView.rotation": "" }).ok); ok("spec: pilihan numerik");
+  assert.ok(!spec.validatePatch({ "printing.copies": "" }).ok && !spec.validatePatch({ "printing.copies": 2.5 }).ok); ok("spec: kolom angka kosong / pecahan ditolak");
+  assert.ok(!spec.validatePatch({ "general.consent.title": "x".repeat(41) }).ok && spec.validatePatch({ "general.consent.title": "x".repeat(40) }).ok); ok("spec: batas panjang teks");
+  assert.ok(!spec.validatePatch({ constructor: 1 }).ok && !spec.validatePatch({ __proto__: 1, toString: 1 }).ok); ok("spec: nama bawaan JS bukan pengaturan");
+  for (const f of Object.values(spec.FIELDS)) if (f.when) assert.ok(spec.FIELDS[f.when], "when tidak dikenal: " + f.path);
+  ok("spec: semua kolom bersyarat (when) menunjuk pengaturan yang ada");
+  assert.ok(spec.validateTool("tools.archive_cleanup", { days: 90 }).ok && !spec.validateTool("tools.archive_cleanup", { days: 3 }).ok && !spec.validateTool("tools.archive_cleanup", {}).ok);
+  assert.ok(spec.validateTool("camera.exposure.set", { prop: "iso", value: "56" }).ok && !spec.validateTool("camera.exposure.set", { prop: "rm", value: "1" }).ok && !spec.validateTool("camera.exposure.set", { prop: "iso", value: "1;x" }).ok);
+  assert.ok(!spec.validateTool("shell", {}).ok); ok("spec: validasi alat");
 
   // --- auth ---
   assert.strictEqual((await call("/healthz")).s, 200);
@@ -75,6 +97,25 @@ const ok = (name) => console.log("  ✓ " + name) || n++;
   assert.strictEqual((await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "rm_rf" } })).s, 400); ok("perintah asing ditolak");
   assert.strictEqual((await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "settings.patch", payload: { "payment.qris.midtrans.serverKey": "x" } } })).s, 400); ok("patch kunci pembayaran ditolak server");
   assert.strictEqual((await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "settings.patch", payload: { "printing.copies": 50 } } })).s, 400);
+
+  // alat: payload dirapikan server, yang tidak sah ditolak
+  assert.strictEqual((await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "tools.archive_cleanup", payload: { days: 2 } } })).s, 400);
+  assert.strictEqual((await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "camera.exposure.set", payload: { prop: "iso", value: "abc" } } })).s, 400); ok("alat: payload tidak sah ditolak");
+  const sp = (await call("/api/spec")).d; assert.ok(Array.isArray(sp.sections) && sp.sections.length >= 9 && sp.sections[0].groups[0].fields.length); ok("/api/spec memuat bagian pengaturan");
+  const flow = (await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "settings.patch", payload: { "general.flow.steps": ["payment", "template", "disclaimer", "consent", "reminder"] } } }));
+  assert.strictEqual(flow.s, 200); ok("urutan alur bisa dikirim sebagai perintah");
+  const tp = await A("/api/agent/poll"); const sent = tp.d.commands.find((c) => c.type === "settings.patch");
+  assert.deepStrictEqual(sent.payload.patch["general.flow.steps"], ["payment", "template", "disclaimer", "consent", "reminder"]);
+  await A("/api/agent/ack", { method: "POST", body: { id: sent.id, ok: true, message: "1 pengaturan diterapkan" } });
+  await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "tools.storage", payload: { fresh: true } } });
+  const tq = (await A("/api/agent/poll")).d.commands; assert.strictEqual(tq[0].type, "tools.storage"); assert.deepStrictEqual(tq[0].payload, { fresh: true });
+  await A("/api/agent/ack", { method: "POST", body: { id: tq[0].id, ok: true, message: "ok", data: { disk: { freeGB: 120, totalGB: 500 } } } });
+  const cm0 = (await call(`/api/booths/${id}/commands`)).d.commands; const st0 = cm0.find((c) => c.id === tq[0].id);
+  assert.strictEqual(st0.status, "done"); assert.strictEqual(st0.result.data.disk.freeGB, 120); ok("alat: hasil dari booth tersimpan dan bisa dibaca");
+  await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "camera.exposure.get" } });
+  const big = (await A("/api/agent/poll")).d.commands[0];
+  await A("/api/agent/ack", { method: "POST", body: { id: big.id, ok: true, data: { blob: "x".repeat(40000) } } });
+  assert.strictEqual((await call(`/api/booths/${id}/commands`)).d.commands.find((c) => c.id === big.id).result.data, null); ok("alat: hasil terlalu besar dibuang, perintah tetap selesai");
 
   // long-poll: tidak ada perintah -> menunggu; perintah masuk -> langsung terkirim
   const t1 = Date.now();

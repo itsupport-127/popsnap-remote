@@ -7,11 +7,12 @@ Web ringan (Node + SQLite + HTML biasa, **tanpa build**, ±1 container kecil) un
 ## Yang bisa dilakukan
 - Daftar booth: online/offline, layar yang sedang tampil, transaksi & omzet hari ini (live).
 - Kontrol: kunci/buka booth (dengan pesan di layar), batalkan sesi, muat ulang tampilan, tes koneksi.
-- Pengaturan aman: harga mode, jumlah foto, timer, cetak/Add Print, mode bayar, warna, jadwal kamera, nama event.
+- **Pengaturan lengkap (158 opsi)**, dikelompokkan seperti menu Pengaturan di app photobox: Booth & Event, Alur Sesi (atur urutan langkah), Tampilan & Layar Awal, Pengingat & Izin, Sesi Foto, Kamera & Live View, Hasil Akhir, GIF/Live/Video, Cetak (termasuk kalibrasi), Pembayaran. Ada kolom cari, kolom bersyarat diredupkan, dan konfirmasi sebelum kirim.
+- **Alat** (menu Tools photobox): cek penyimpanan, bersihkan arsip foto lama, bersihkan file tidak terpakai, status kamera, baca/ubah ISO-shutter-aperture-WB (Canon/Nikon langsung).
 - Transaksi lengkap per booth (filter tanggal/status/cari, sembunyikan TEST, Add Print ditandai, unduh CSV).
 - Riwayat perintah (siapa, kapan, berhasil/gagal).
 
-**Tidak bisa diubah dari jarak jauh (sengaja):** kunci pembayaran (Midtrans/DOKU), PIN, token kasir, folder penyimpanan, template. Daftar yang diizinkan ada di `src/spec.js` dan diperiksa ULANG di booth (`backend/remoteSpec.js`).
+**Tidak bisa diubah dari jarak jauh (sengaja):** kunci/rahasia pembayaran (Midtrans/DOKU/POS), PIN, pengaturan sinkron ke web lain (kasir, galeri, remote itu sendiri), folder penyimpanan, nama printer/kamera/perangkat, unggah gambar, daftar filter & isi baris pengingat, simulasi QRIS, dan menutup aplikasi. Daftar yang diizinkan ada di `src/spec.js` dan diperiksa ULANG di booth (`backend/remoteSpec.js`, salinan persis).
 
 ## Deploy (Docker)
 ```bash
@@ -50,7 +51,7 @@ Ganti token (mis. token bocor): hapus & buat booth lagi, atau panggil `POST /api
 ## Keamanan
 - Login admin dengan batas percobaan (8 gagal / 10 menit / IP), cookie HttpOnly + SameSite, cek Origin untuk aksi tulis.
 - Token booth disimpan **hash**-nya saja (SHA-256) di server.
-- Perintah ke booth hanya dari daftar tetap (kunci, buka, batal sesi, muat ulang, ubah setelan aman, ping).
+- Perintah ke booth hanya dari daftar tetap (kunci, buka, batal sesi, muat ulang, ubah pengaturan dari daftar, alat penyimpanan/kamera, ping).
 - Satu akun admin (dari `.env`). Butuh banyak akun / peran? Belum ada di v1.
 
 ## Data & backup
