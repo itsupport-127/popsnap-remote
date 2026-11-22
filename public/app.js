@@ -170,13 +170,16 @@ function settingsBody() {
     return out || `<div class="card empty">Tidak ada pengaturan yang cocok dengan “${esc(S.q)}”.</div>`;
   }
   const sec = S.spec.sections.find((s) => s.id === S.sec) || S.spec.sections[0];
-  return `<h2 class="sec-title">${esc(sec.title)}</h2><p class="sec-desc">${esc(sec.desc || "")}</p>${sec.groups.map((g) => groupHtml(g)).join("")}`;
+  const body = sec.groups.map((g) => groupHtml(g)).join("");
+  return `<h2 class="sec-title">${esc(sec.title)}</h2><p class="sec-desc">${esc(sec.desc || "")}</p>${body || `<div class="banner warn">Booth belum mengirim pengaturan untuk bagian ini. Kemungkinan app photobox di booth masih versi lama: perbarui file photobox (<b>backend/remoteSpec.js</b>, <b>remoteAgent.js</b>, <b>server.js</b>, <b>cameraBridge.js</b>) lalu restart app, dan bagian ini akan terisi.</div>`}`;
 }
 function settingsHtml(b) {
   if (!Object.keys(b.settings || {}).length) return `<div class="card empty">Belum ada data pengaturan dari booth. ${b.online ? "Tunggu beberapa detik." : "Booth sedang offline."}</div>`;
   if (!S.sec) S.sec = S.spec.sections[0].id;
+  const missing = Object.keys(S.fields).filter((p) => b.settings[p] === undefined).length;
   const nav = S.spec.sections.map((s) => { const n = secDirty(s); return `<button class="${s.id === S.sec && !S.q ? "on" : ""}" data-act="sec" data-sec="${s.id}">${esc(s.title)}${n ? ` <span class="cnt">${n}</span>` : ""}<small>${esc(s.desc || "")}</small></button>`; }).join("");
   return `${!b.online ? `<div class="banner warn">Booth offline: perubahan akan dikirim saat booth online lagi (maks. 10 menit).</div>` : ""}
+    ${missing ? `<div class="banner warn"><b>${missing} pengaturan belum dikirim booth.</b> App photobox di booth kemungkinan belum diperbarui — pasang versi terbaru lalu restart, setelah itu semuanya muncul.</div>` : ""}
     <div class="banner">Semua pengaturan photobox bisa diubah di sini. Yang <b>tidak</b> bisa dari jarak jauh: kunci/rahasia, sinkron kasir &amp; galeri, folder, nama perangkat, dan unggah file — ubah itu langsung di app photobox.</div>
     <div class="set"><div><input class="search" type="search" id="sq" placeholder="Cari pengaturan… (mis. harga, printer, countdown)" value="${esc(S.q)}"><nav class="snav" id="snav">${nav}</nav></div><div id="sbody">${settingsBody()}</div></div>`;
 }
