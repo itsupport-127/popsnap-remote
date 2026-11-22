@@ -1,7 +1,7 @@
 (() => {
 "use strict";
 const $app = document.getElementById("app");
-const S = { me: null, spec: null, booths: [], total: { count: 0, revenue: 0 }, online: 0, booth: null, tab: "kontrol", fields: {}, sec: null, q: "", tx: null, txQ: null, cmds: [], dirty: {}, es: null };
+const S = { me: null, spec: null, booths: [], total: { count: 0, revenue: 0 }, online: 0, booth: null, tab: "kontrol", fields: {}, sec: null, q: "", waiting: new Set(), tx: null, txQ: null, cmds: [], dirty: {}, es: null };
 
 // ---------- util ----------
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -129,7 +129,7 @@ const dirtyCount = () => Object.keys(S.dirty).length;
 const curVal = (p) => (S.dirty[p] !== undefined ? S.dirty[p] : S.booth.settings[p]);
 const gateOk = (f) => { if (!f.when) return true; const v = curVal(f.when); return f.whenValue !== undefined ? String(v) === String(f.whenValue) : !!v; };
 const gateText = (f) => { const g = S.fields[f.when]; if (!g) return ""; return f.whenValue !== undefined ? `aktif jika “${g.label}” = ${(g.options?.find(([o]) => String(o) === String(f.whenValue)) || [0, f.whenValue])[1]}` : `aktif jika “${g.label}” dinyalakan`; };
-const sameVal = (f, a, b) => f.type === "steps" ? JSON.stringify(a) === JSON.stringify(b) : f.type === "color" ? String(a).toLowerCase() === String(b).toLowerCase() : f.type === "int" || f.type === "num" ? Number(a) === Number(b) : f.type === "enum" ? String(a) === String(b) : a === b;
+const sameVal = (f, a, b) => f.type === "profile" || f.type === "periods" ? JSON.stringify(f.type === "profile" ? normProf(a) : normPer(a)) === JSON.stringify(f.type === "profile" ? normProf(b) : normPer(b)) : f.type === "steps" ? JSON.stringify(a) === JSON.stringify(b) : f.type === "color" ? String(a).toLowerCase() === String(b).toLowerCase() : f.type === "int" || f.type === "num" ? Number(a) === Number(b) : f.type === "enum" ? String(a) === String(b) : a === b;
 const secDirty = (sec) => sec.groups.reduce((n, g) => n + g.fields.filter((f) => S.dirty[f.path] !== undefined).length, 0);
 
 function fieldInput(f) {
@@ -154,9 +154,9 @@ function stepsHtml(f) {
 }
 function fieldHtml(f) {
   const on = gateOk(f), chg = S.dirty[f.path] !== undefined;
-  const wide = f.type === "textarea" || f.type === "steps";
+  const wide = ["textarea", "steps", "profile", "periods"].includes(f.type);
   return `<div class="fld ${chg ? "chg" : ""} ${on ? "" : "off"} ${f.danger ? "danger" : ""} ${wide ? "wide" : ""}" data-fld="${f.path}"><div class="lb"><b>${esc(f.label)}</b>${f.hint ? `<small>${esc(f.hint)}</small>` : ""}<small class="gate">${on ? "" : esc(gateText(f))}</small></div>
-    <div class="ct">${f.type === "steps" ? "" : fieldInput(f)}</div>${f.type === "steps" ? stepsHtml(f) : ""}</div>`;
+    ${wide && f.type !== "textarea" ? "" : `<div class="ct">${fieldInput(f)}</div>`}${f.type === "steps" ? stepsHtml(f) : f.type === "profile" ? profileHtml(f) : f.type === "periods" ? periodsHtml(f) : ""}</div>`;
 }
 function groupHtml(g, filter) {
   const fs = g.fields.filter((f) => S.booth.settings[f.path] !== undefined && (!filter || (f.label + " " + (f.hint || "") + " " + g.title).toLowerCase().includes(filter)));
@@ -178,7 +178,7 @@ function settingsHtml(b) {
   if (!S.sec) S.sec = S.spec.sections[0].id;
   const missing = Object.keys(S.fields).filter((p) => b.settings[p] === undefined).length;
   const nav = S.spec.sections.map((s) => { const n = secDirty(s); return `<button class="${s.id === S.sec && !S.q ? "on" : ""}" data-act="sec" data-sec="${s.id}">${esc(s.title)}${n ? ` <span class="cnt">${n}</span>` : ""}<small>${esc(s.desc || "")}</small></button>`; }).join("");
-  return `${!b.online ? `<div class="banner warn">Booth offline: perubahan akan dikirim saat booth online lagi (maks. 10 menit).</div>` : ""}
+  return `<div class="banner" id="waitbn" style="${S.waiting.size ? "" : "display:none"}">Ada perubahan yang masih menunggu booth (offline atau menunggu sesi selesai). Hasilnya muncul sebagai pesan.</div>${!b.online ? `<div class="banner warn">Booth offline: perubahan akan dikirim saat booth online lagi (maks. 10 menit).</div>` : ""}
     ${missing ? `<div class="banner warn"><b>${missing} pengaturan belum dikirim booth.</b> App photobox di booth kemungkinan belum diperbarui — pasang versi terbaru lalu restart, setelah itu semuanya muncul.</div>` : ""}
     <div class="banner">Semua pengaturan photobox bisa diubah di sini. Yang <b>tidak</b> bisa dari jarak jauh: kunci/rahasia, sinkron kasir &amp; galeri, folder, nama perangkat, dan unggah file — ubah itu langsung di app photobox.</div>
     <div class="set"><div><input class="search" type="search" id="sq" placeholder="Cari pengaturan… (mis. harga, printer, countdown)" value="${esc(S.q)}"><nav class="snav" id="snav">${nav}</nav></div><div id="sbody">${settingsBody()}</div></div>`;
@@ -224,6 +224,8 @@ function fmtVal(f, v) {
   if (v === undefined || v === null) return "-";
   if (f.type === "bool") return v ? "Ya" : "Tidak";
   if (f.type === "enum") return f.options.find(([o]) => String(o) === String(v))?.[1] || String(v);
+  if (f.type === "profile") return profSummary(v);
+  if (f.type === "periods") return normPer(v).length ? normPer(v).map((p) => `${p.label} ${p.from}–${p.to}`).join(", ") : "(tanpa periode)";
   if (f.type === "steps") return v.map((id) => f.options.find((o) => o[0] === id)?.[1] || id).join(" → ");
   if (f.type === "textarea" || f.type === "text") { const s = String(v); return s.length > 60 ? s.slice(0, 60) + "…" : s || "(kosong)"; }
   if (f.unit === "Rp") return rp(v);
@@ -237,19 +239,121 @@ function saveSettings() {
   modal(`<h2>Kirim ${lines.length} perubahan ke ${esc(S.booth.name)}?</h2>
     <div class="card pad" style="margin:10px 0">${lines.map((l) => `<div class="kv"><span>${esc(l.f.label)}</span><span style="text-align:right"><span class="mut">${esc(fmtVal(l.f, S.booth.settings[l.p]))}</span> → <b>${esc(fmtVal(l.f, l.v))}</b></span></div>`).join("")}</div>
     ${risky.length ? `<div class="banner warn">Ada pengaturan sensitif (${risky.map((l) => esc(l.f.label)).join(", ")}). Berlaku untuk tamu berikutnya — pastikan sudah benar.</div>` : ""}
+    <div class="card pad" style="margin:10px 0"><label class="row" style="cursor:pointer;align-items:flex-start;gap:8px"><input type="radio" name="when" value="now" checked style="margin-top:3px"><span><b>Terapkan sekarang</b><br><span class="small mut">Langsung berlaku. Kalau ada tamu sedang sesi, layarnya bisa berubah di tengah jalan.</span></span></label>
+      <label class="row" style="cursor:pointer;align-items:flex-start;gap:8px;margin-top:8px"><input type="radio" name="when" value="idle" style="margin-top:3px"><span><b>Setelah sesi selesai</b><br><span class="small mut">Menunggu sampai booth kembali ke layar awal (maks. 30 menit). Aman untuk harga, mode bayar, dan alur.</span></span></label></div>
     <div class="row" style="justify-content:flex-end"><button class="btn" data-act="close">Batal</button><button class="btn pri" data-act="save-go">Kirim</button></div>`);
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function sendSettings() {
+  const idle = document.querySelector('input[name="when"]:checked')?.value === "idle";
+  const sent = { ...S.dirty }, prev = {}; for (const p of Object.keys(sent)) prev[p] = S.booth.settings[p];
+  const boothId = S.booth.id;
   try {
-    await sendCmd("settings.patch", { ...S.dirty }, true);
-    Object.assign(S.booth.settings, S.dirty); S.dirty = {}; closeModal(); toast("Perubahan dikirim ke booth.", "ok");
+    const r = await sendCmd("settings.patch", sent, true, idle);
+    Object.assign(S.booth.settings, sent); S.dirty = {}; closeModal();
+    toast(idle ? "Dikirim. Diterapkan setelah sesi selesai." : (r.online ? "Dikirim, menunggu jawaban booth…" : "Booth offline — menunggu booth online."), idle ? "ok" : "");
     updateBar(); if (S.tab === "setelan") renderTab();
+    watchSettings(r.id, sent, prev, idle, boothId); // tidak ditunggu: hasil muncul sebagai pesan
   } catch (e) { toast(e.message, "bad"); }
+}
+async function watchSettings(id, sent, prev, idle, boothId) {
+  S.waiting.add(id);
+  const end = Date.now() + (idle ? 31 : 3) * 60000;
+  try {
+    while (Date.now() < end) {
+      await sleep(idle ? 4000 : 1200);
+      if (!S.booth || S.booth.id !== boothId) return; // pindah halaman: hasilnya tetap ada di Riwayat perintah
+      let c; try { c = (await api(`/api/booths/${boothId}/commands`)).commands.find((x) => x.id === id); } catch { continue; }
+      if (!c) return;
+      if (c.status === "pending" || c.status === "sent") continue;
+      if (c.status === "done") { toast(`Booth menerapkan perubahan${c.result?.message ? ": " + c.result.message : ""}.`, "ok"); return; }
+      for (const p of Object.keys(sent)) if (S.booth.settings[p] === sent[p] && !(p in S.dirty)) S.booth.settings[p] = prev[p]; // gagal: kembalikan tampilan ke nilai lama
+      toast(`Perubahan TIDAK diterapkan: ${c.result?.error || STATUS[c.status]?.[0] || c.status}`, "bad");
+      if (S.tab === "setelan") renderTab();
+      return;
+    }
+  } finally { S.waiting.delete(id); if (S.tab === "setelan" && S.booth?.id === boothId) { const b = document.getElementById("waitbn"); if (b) b.style.display = S.waiting.size ? "" : "none"; } }
+}
+
+// ----- profil kamera & jadwal (ISO / shutter / aperture / WB) -----
+const PKEYS = ["tv", "av", "iso", "wb"], PNAMES = { tv: "Shutter", av: "Aperture", iso: "ISO", wb: "White balance" };
+const normProf = (v) => Object.fromEntries(PKEYS.map((k) => [k, v && v[k] != null && v[k] !== "" ? String(v[k]) : ""]));
+const normPer = (arr) => (Array.isArray(arr) ? arr : []).map((q, i) => ({ id: q.id || "p" + (i + 1), label: q.label || "", from: q.from || "06:00", to: q.to || "18:00", live: normProf(q.live), photo: normProf(q.photo) }));
+function expKey() { return "popsnap.expinfo." + (S.booth?.id ?? 0); }
+function expInfo() {
+  if (S.expInfo === undefined) { try { S.expInfo = JSON.parse(localStorage.getItem(expKey()) || "null"); } catch { S.expInfo = null; } }
+  return S.expInfo;
+}
+const optLabel = (key, val) => { const o = expInfo()?.[key]?.opts?.find(([v]) => String(v) === String(val)); return o ? o[1] : null; };
+function profSummary(pr) { const x = normProf(pr); return PKEYS.filter((k) => x[k]).map((k) => `${k === "tv" ? "S" : k === "av" ? "f" : k === "iso" ? "ISO" : "WB"} ${optLabel(k, x[k]) || "kode " + x[k]}`).join(" · ") || "belum diisi"; }
+function camSel(attrs, key, val) {
+  const opts = (expInfo()?.[key]?.opts || []).slice();
+  if (val && !opts.some(([v]) => String(v) === String(val))) opts.unshift([val, `kode ${val} (tersimpan)`]);
+  return `<select ${attrs} data-key="${key}" aria-label="${PNAMES[key]}"><option value="">(tidak diatur)</option>${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(val) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+}
+function readBar() {
+  const i = expInfo();
+  return `<div class="row" style="margin-bottom:8px"><button class="btn sm dark" data-act="exp-read">Baca opsi dari kamera</button><span class="small mut">${i ? "Pilihan sudah dimuat dari kamera." : "Pilihan kosong sampai dibaca dari kamera (Canon / Nikon langsung, booth di layar awal)."}</span></div>`;
+}
+function profileHtml(f) {
+  const v = normProf(curVal(f.path));
+  return `<div class="pbox" data-pbox="${f.path}">${readBar()}<div class="pgrid">${PKEYS.map((k) => `<label class="small"><span class="mut">${PNAMES[k]}</span>${camSel(`data-prof="${f.path}"`, k, v[k])}</label>`).join("")}</div></div>`;
+}
+function periodCard(f, p, i) {
+  const pr = (w, val) => `<div class="pgrid">${PKEYS.map((k) => `<label class="small"><span class="mut">${PNAMES[k]}</span>${camSel(`data-per="${f.path}" data-i="${i}" data-w="${w}"`, k, val[k])}</label>`).join("")}</div>`;
+  return `<div class="pcard"><div class="row"><input type="text" data-per="${f.path}" data-i="${i}" data-w="label" value="${esc(p.label)}" maxlength="24" style="width:150px" aria-label="Nama periode"><span class="small">dari</span><input type="time" data-per="${f.path}" data-i="${i}" data-w="from" value="${esc(p.from)}"><span class="small">sampai</span><input type="time" data-per="${f.path}" data-i="${i}" data-w="to" value="${esc(p.to)}">
+    <span class="sp"></span><button class="btn sm" data-act="per-fill" data-path="${f.path}" data-i="${i}">Isi dari kamera sekarang</button><button class="btn sm bad" data-act="per-del" data-path="${f.path}" data-i="${i}">Hapus</button></div>
+    <div class="small" style="margin:8px 0 2px"><b>Live View</b></div>${pr("live", p.live)}<div class="small" style="margin:8px 0 2px"><b>Foto</b></div>${pr("photo", p.photo)}</div>`;
+}
+function periodsHtml(f) {
+  const list = normPer(curVal(f.path));
+  return `<div class="pbox" data-pbox="${f.path}">${readBar()}${list.map((p, i) => periodCard(f, p, i)).join("") || `<div class="small mut" style="margin-bottom:8px">Belum ada periode. Tambah periode lalu isi jam dan setelan kameranya.</div>`}
+    <button class="btn pri sm" data-act="per-add" data-path="${f.path}" ${list.length >= 6 ? "disabled" : ""}>+ Tambah periode</button><span class="small mut"> maks. 6 · jam tidak boleh bertumpuk</span></div>`;
+}
+function setDirtyObj(f, val) { // simpan ke S.dirty bila beda dari nilai booth
+  const orig = S.booth.settings[f.path];
+  const norm = (x) => JSON.stringify(f.type === "profile" ? normProf(x) : normPer(x));
+  if (norm(val) === norm(orig)) delete S.dirty[f.path]; else S.dirty[f.path] = val;
+  document.querySelector(`[data-fld="${f.path}"]`)?.classList.toggle("chg", S.dirty[f.path] !== undefined);
+  updateBar();
+  const bt = document.querySelectorAll("#snav button"); S.spec.sections.forEach((s, i) => { const n = secDirty(s); let c = bt[i]?.querySelector(".cnt"); if (n && !c && bt[i]) { c = document.createElement("span"); c.className = "cnt"; bt[i].insertBefore(c, bt[i].querySelector("small")); } if (c) { if (n) c.textContent = n; else c.remove(); } });
+}
+function onProfInput(el) {
+  const f = S.fields[el.dataset.prof]; const v = normProf(curVal(f.path)); v[el.dataset.key] = el.value; setDirtyObj(f, v);
+}
+function onPerInput(el) {
+  const f = S.fields[el.dataset.per], list = normPer(curVal(f.path)), p = list[Number(el.dataset.i)]; if (!p) return;
+  const w = el.dataset.w;
+  if (w === "live" || w === "photo") p[w][el.dataset.key] = el.value; else if (el.value || w === "label") p[w] = el.value;
+  setDirtyObj(f, list);
+}
+function rerenderPbox(path) { const box = document.querySelector(`[data-pbox="${path}"]`), f = S.fields[path]; if (box) box.outerHTML = f.type === "profile" ? profileHtml(f) : periodsHtml(f); }
+async function readCam() { // baca opsi + nilai sekarang dari kamera lewat booth
+  const c = await runTool("camera.exposure.get", undefined, "Baca setelan kamera");
+  if (c?.status === "done" && c.result?.data) { S.expInfo = c.result.data; try { localStorage.setItem(expKey(), JSON.stringify(S.expInfo)); } catch { /* abaikan */ } }
+  return c?.status === "done" ? S.expInfo : null;
+}
+function refreshPboxes() { document.querySelectorAll("[data-pbox]").forEach((b) => rerenderPbox(b.dataset.pbox)); }
+async function perAction(act, el) {
+  const f = S.fields[el.dataset.path], list = normPer(curVal(f.path)), i = Number(el.dataset.i);
+  if (act === "per-add") {
+    if (list.length >= 6) return;
+    const last = list[list.length - 1];
+    list.push({ id: "p" + Math.random().toString(36).slice(2, 7), label: "Periode " + (list.length + 1), from: last ? last.to : "06:00", to: last ? (last.to === "18:00" ? "21:00" : "18:00") : "18:00", live: normProf({}), photo: normProf({}) });
+  } else if (act === "per-del") { if (!confirm(`Hapus periode “${list[i]?.label}”?`)) return; list.splice(i, 1); }
+  else if (act === "per-fill") {
+    el.disabled = true; const info = await readCam(); if (!info) { el.disabled = false; return; }
+    const cur = Object.fromEntries(PKEYS.map((k) => [k, info[k]?.cur != null ? String(info[k].cur) : ""]));
+    list[i].live = normProf(curVal("camera.exposure.split") ? curVal("camera.exposure.live") : cur);
+    list[i].photo = normProf(curVal("camera.exposure.split") ? curVal("camera.exposure.photo") : cur);
+    toast("Setelan kamera disimpan ke periode itu (belum dikirim).", "ok");
+  }
+  setDirtyObj(f, list); rerenderPbox(f.path);
 }
 
 // ----- perintah -----
-async function sendCmd(type, payload, quiet) {
-  const r = await api(`/api/booths/${S.booth.id}/commands`, { method: "POST", body: { type, payload } });
+async function sendCmd(type, payload, quiet, whenIdle) {
+  const r = await api(`/api/booths/${S.booth.id}/commands`, { method: "POST", body: { type, payload, ...(whenIdle ? { whenIdle: true } : {}) } });
   if (!quiet) toast(r.online ? "Perintah dikirim." : "Booth offline — perintah menunggu booth online.", r.online ? "ok" : "");
   return r;
 }
@@ -259,7 +363,7 @@ const STATUS = { pending: ["Menunggu booth", "warn"], sent: ["Diproses", "warn"]
 function logHtml() {
   if (!S.cmds.length) return `<div class="card empty">Belum ada perintah.</div>`;
   return `<div class="card scroll"><table><thead><tr><th>Waktu</th><th>Perintah</th><th>Oleh</th><th>Status</th></tr></thead><tbody>${S.cmds.map((c) => {
-    const st = STATUS[c.status] || [c.status, ""];
+    const st = c.status === "pending" && c.payload?.whenIdle ? ["Menunggu sesi selesai", "warn"] : (STATUS[c.status] || [c.status, ""]);
     const detail = c.type === "tools.archive_cleanup" && c.payload?.days ? "lebih tua dari " + c.payload.days + " hari" : c.type === "camera.exposure.set" && c.payload ? c.payload.prop + " = " + c.payload.value : c.type === "settings.patch" && c.payload?.patch ? Object.keys(c.payload.patch).length + " pengaturan" : c.type === "lock" && c.payload?.message ? "“" + c.payload.message + "”" : "";
     const note = c.result?.error || c.result?.message || "";
     return `<tr><td class="small">${fmtDT(c.created_at)}</td><td>${esc(CMD[c.type] || c.type)}${detail ? `<div class="small mut">${esc(detail)}</div>` : ""}</td><td class="small">${esc(c.by || "")}</td>
@@ -317,6 +421,7 @@ function logText(d, name) {
 function logHtml(c) {
   const d = c?.result?.data;
   if (c && c.status !== "done") return `<div class="banner bad">${esc(c.result?.error || "Gagal mengambil log.")}</div>`;
+  if (c && !d) return `<div class="banner warn">Booth menjawab tapi isi log tidak sampai (terlalu besar?). Persempit jam, naikkan filter ke “Error saja”, atau kurangi jumlah baris.</div>`;
   if (!d) return `<p class="mut small">Pilih tanggal lalu klik “Ambil log”. Kosongkan tanggal untuk hari ini.</p>`;
   const chips = (d.dates || []).map((x) => `<button class="chip ${x === d.date ? "ok" : ""}" style="cursor:pointer;border:0" data-act="lg-date" data-d="${x}">${x}${x === d.today ? " (hari ini)" : ""}</button>`).join(" ");
   const act = d.activity || [];
@@ -438,6 +543,8 @@ document.addEventListener("click", async (e) => {
     else if (act === "save-go") await sendSettings();
     else if (act === "discard") { S.dirty = {}; renderTab(); updateBar(); }
     else if (act === "sec") { S.sec = el.dataset.sec; S.q = ""; const q = document.getElementById("sq"); if (q) q.value = ""; refreshSettings(); window.scrollTo(0, 0); }
+    else if (act === "exp-read") { el.disabled = true; try { await readCam(); } finally { refreshPboxes(); } }
+    else if (act === "per-add" || act === "per-del" || act === "per-fill") await perAction(act, el);
     else if (act === "mv") moveStep(el.dataset.path, Number(el.dataset.i), Number(el.dataset.d));
     else if (act === "lg-get" || act === "lg-today" || act === "lg-date") {
       if (act === "lg-today") { const e = document.getElementById("lg_date"); if (e) e.value = ""; }
@@ -462,13 +569,16 @@ document.addEventListener("click", async (e) => {
 });
 document.addEventListener("input", (e) => {
   const el = e.target;
-  if (el.dataset?.path && el.type !== "checkbox" && el.tagName !== "SELECT") onSettingInput(el);
+  if (el.dataset?.per && el.tagName === "INPUT" && el.type === "text") onPerInput(el);
+  else if (el.dataset?.path && el.type !== "checkbox" && el.tagName !== "SELECT") onSettingInput(el);
   else if (el.id === "sq") { S.q = el.value; refreshSettings(); }
   else if (el.id === "txq") { S.txQ.q = el.value; debTx(); }
 });
 document.addEventListener("change", (e) => {
   const el = e.target;
-  if (el.dataset?.path && (el.type === "checkbox" || el.tagName === "SELECT")) onSettingInput(el);
+  if (el.dataset?.prof) onProfInput(el);
+  else if (el.dataset?.per) onPerInput(el);
+  else if (el.dataset?.path && (el.type === "checkbox" || el.tagName === "SELECT")) onSettingInput(el);
   else if (el.id === "txs") { S.txQ.status = el.value; renderTx(true); }
   else if (el.id === "txt") { S.txQ.hideTest = el.checked; renderTx(true); }
 });
@@ -502,7 +612,7 @@ async function show() {
   const { id } = route();
   try {
     if (!id) { await loadList(); renderList(); return; }
-    if (!S.booth || S.booth.id !== id) { S.dirty = {}; S.tx = null; S.txQ = null; S.q = ""; for (const k in TOOL_LAST) delete TOOL_LAST[k]; }
+    if (!S.booth || S.booth.id !== id) { S.dirty = {}; S.tx = null; S.txQ = null; S.q = ""; S.expInfo = undefined; for (const k in TOOL_LAST) delete TOOL_LAST[k]; }
     await loadBooth(id); detailShell();
   } catch (e) { if (S.me) { toast(e.message, "bad"); location.hash = "#/"; } }
 }

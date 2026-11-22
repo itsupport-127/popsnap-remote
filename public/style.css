@@ -146,3 +146,10 @@ input[type=color]{width:46px;height:34px;border:1px solid var(--line2);border-ra
  .fld{flex-direction:column;align-items:stretch;gap:6px}.fld .ct{max-width:none}
  .fld input[type=number],.fld input[type=text],.fld select{width:100%}.fld .sw{align-self:flex-start}
 }
+/* profil kamera & periode jadwal */
+.pbox{width:100%}
+.pgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.pgrid label{display:flex;flex-direction:column;gap:3px}.pgrid select{width:100%}
+.pcard{border:1px solid var(--line);border-radius:16px;padding:12px;background:#fff;margin-bottom:10px}
+@media (max-width:760px){.pgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.fld.off .pbox,.fld.off .steps{pointer-events:none}

@@ -10,6 +10,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const ONLINE_MS = (Number(process.env.ONLINE_SEC) || 35) * 1000;
 const POLL_WAIT_MS = 25 * 1000;
 const CMD_PENDING_TTL = 10 * 60 * 1000;  // perintah belum diambil booth (offline) -> kedaluwarsa
+const CMD_IDLE_TTL = 30 * 60 * 1000;     // perintah 'setelah sesi selesai' boleh menunggu lebih lama
 const CMD_SENT_TTL = 2 * 60 * 1000;      // sudah diambil tapi tak ada konfirmasi -> kedaluwarsa
 const COMMANDS = ["lock", "unlock", "cancel_session", "reload_ui", "settings.patch", "ping", ...spec.TOOL_TYPES];
 
@@ -195,6 +196,7 @@ app.post("/api/booths/:id/commands", admin, sameOrigin, (req, res) => {
     const v = spec.validatePatch(payload);
     if (!v.ok) return res.status(400).json({ error: v.errors[0] || "Tidak ada perubahan.", errors: v.errors });
     payload = { patch: v.clean };
+    if (req.body?.whenIdle === true) payload.whenIdle = true; // ditahan server sampai booth di layar awal (tidak ada sesi tamu)
   } else if (type === "lock") {
     payload = { message: String(payload?.message ?? "").trim().slice(0, 120) };
   } else if (spec.TOOL_TYPES.includes(type)) {
@@ -220,16 +222,31 @@ function wake(boothId) {
   const w = waiting.get(boothId);
   if (w) { clearTimeout(w.timer); waiting.delete(boothId); deliver(boothId, w.res); }
 }
+// booth dianggap kosong bila tidak ada layar sesi (kiosk mati / belum melapor) atau di layar awal
+function boothIdle(boothId) {
+  const r = db.prepare("SELECT ui FROM booths WHERE id=?").get(boothId); const ui = parse(r?.ui) || {};
+  return !ui.screen || ui.screen === "WELCOME";
+}
+function hasIdleWaiting(boothId) {
+  return !!db.prepare("SELECT 1 FROM commands WHERE booth_id=? AND status='pending' AND payload LIKE '%\"whenIdle\":true%' LIMIT 1").get(boothId);
+}
+// perintah menunggu yang boleh dikirim SEKARANG (yang 'setelah sesi selesai' ditahan selama ada sesi)
+function deliverable(boothId) {
+  const idle = boothIdle(boothId);
+  return db.prepare("SELECT id, type, payload FROM commands WHERE booth_id=? AND status='pending' ORDER BY id LIMIT 30").all(boothId)
+    .filter((r) => idle || !parse(r.payload)?.whenIdle).slice(0, 10);
+}
 function deliver(boothId, res) {
   expireOld();
-  const rows = db.prepare("SELECT id, type, payload FROM commands WHERE booth_id=? AND status='pending' ORDER BY id LIMIT 10").all(boothId);
+  const rows = deliverable(boothId);
   if (rows.length) db.prepare(`UPDATE commands SET status='sent', sent_at=? WHERE id IN (${rows.map(() => "?").join(",")})`).run(now(), ...rows.map((r) => r.id));
   if (!res.writableEnded) res.json({ commands: rows.map((r) => ({ id: r.id, type: r.type, payload: parse(r.payload) })) });
   if (rows.length) emit(boothId, "cmd");
 }
 function expireOld() {
   const t = now();
-  db.prepare("UPDATE commands SET status='expired', done_at=? WHERE status='pending' AND created_at < ?").run(t, t - CMD_PENDING_TTL);
+  db.prepare("UPDATE commands SET status='expired', done_at=? WHERE status='pending' AND created_at < ? AND payload NOT LIKE '%\"whenIdle\":true%'").run(t, t - CMD_PENDING_TTL);
+  db.prepare("UPDATE commands SET status='expired', done_at=? WHERE status='pending' AND created_at < ?").run(t, t - CMD_IDLE_TTL);
   db.prepare("UPDATE commands SET status='expired', done_at=? WHERE status='sent' AND sent_at < ?").run(t, t - CMD_SENT_TTL);
   db.prepare("DELETE FROM commands WHERE created_at < ? AND status NOT IN ('pending','sent')").run(t - 14 * 86400000); // riwayat >14 hari dibuang (hasil alat seperti log bisa besar)
 }
@@ -257,6 +274,7 @@ app.post("/api/agent/hello", agent, (req, res) => {
     } catch (e) { db.exec("ROLLBACK"); console.error("[tx]", e.message); }
   }
   emit(b.id, "hello");
+  if (hasIdleWaiting(b.id) && boothIdle(b.id)) wake(b.id); // sesi selesai -> kirim perubahan yang menunggu
   res.json({ ok: true, serverTime: now(), name: b.name });
 });
 
@@ -264,8 +282,7 @@ app.get("/api/agent/poll", agent, (req, res) => {
   const b = req.booth;
   db.prepare("UPDATE booths SET last_seen_at=? WHERE id=?").run(now(), b.id);
   const old = waiting.get(b.id); if (old) { clearTimeout(old.timer); waiting.delete(b.id); if (!old.res.writableEnded) old.res.json({ commands: [] }); }
-  const has = db.prepare("SELECT 1 FROM commands WHERE booth_id=? AND status='pending' LIMIT 1").get(b.id);
-  if (has) return deliver(b.id, res);
+  if (deliverable(b.id).length) return deliver(b.id, res);
   const timer = setTimeout(() => { waiting.delete(b.id); if (!res.writableEnded) res.json({ commands: [] }); }, POLL_WAIT_MS);
   waiting.set(b.id, { res, timer });
   req.on("close", () => { const w = waiting.get(b.id); if (w && w.res === res) { clearTimeout(w.timer); waiting.delete(b.id); } });

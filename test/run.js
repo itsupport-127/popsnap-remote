@@ -27,6 +27,11 @@ const ok = (name) => console.log("  ✓ " + name) || n++;
   assert.ok(!spec.validatePatch({ "printing.auto": "ya" }).ok); ok("spec: tipe salah ditolak");
   assert.deepStrictEqual(spec.unflatten({ "a.b.c": 1, "a.d": 2 }), { a: { b: { c: 1 }, d: 2 } }); ok("spec: unflatten");
   // --- spec: cakupan baru ---
+  const PRD = (a, b, l = "P") => ({ label: l + a, from: a, to: b, live: { iso: "100" }, photo: {} });
+  assert.ok(spec.validatePatch({ "camera.exposure.live": { iso: "3200", tv: "", av: "5", wb: "" } }).ok && !spec.validatePatch({ "camera.exposure.live": { iso: "abc" } }).ok && !spec.validatePatch({ "camera.exposure.live": { rm: "1" } }).ok); ok("spec: profil kamera hanya kode angka, kunci terbatas");
+  assert.ok(spec.validatePatch({ "camera.exposureSchedule.periods": [PRD("08:00", "17:00"), PRD("17:00", "21:00")] }).ok && spec.validatePatch({ "camera.exposureSchedule.periods": [PRD("21:00", "06:00"), PRD("06:00", "08:00")] }).ok && spec.validatePatch({ "camera.exposureSchedule.periods": [] }).ok); ok("spec: periode jadwal sah (termasuk lewat tengah malam)");
+  for (const bad of [[PRD("08:00", "17:00"), PRD("16:00", "21:00")], [PRD("21:00", "06:00"), PRD("05:00", "08:00")], [PRD("08:00", "08:00")], [{ label: "", from: "08:00", to: "09:00" }], [PRD("25:00", "09:00")], Array.from({ length: 7 }, (_, i) => PRD(String(i * 3).padStart(2, "0") + ":00", String(i * 3 + 1).padStart(2, "0") + ":00"))]) assert.ok(!spec.validatePatch({ "camera.exposureSchedule.periods": bad }).ok);
+  ok("spec: periode bertumpuk / jam sama / nama kosong / jam salah / lebih dari 6 ditolak");
   assert.ok(Object.keys(spec.FIELDS).length >= 150); ok("spec: >150 pengaturan bisa diatur dari remote");
   for (const bad of ["payment.cloud.url", "payment.cloud.token", "payment.cloud.galleryUrl", "payment.cloud.studioCode", "payment.qris.simulate", "payment.qris.provider", "payment.qris.doku.secretKey", "payment.pos.apiKey",
     "general.security.pin", "general.dataDir", "general.export.dir", "camera.dslr.host", "camera.videoDeviceId", "printing.main.name", "remote.url", "remote.token", "remote.enabled"])
@@ -124,6 +129,17 @@ const ok = (name) => console.log("  ✓ " + name) || n++;
   await A("/api/agent/ack", { method: "POST", body: { id: lg.id, ok: true, message: "ok", data: { date: "2026-11-22", lines: ["x".repeat(100)].concat(Array(2000).fill("2026-11-22 10:00:00.000 [I] baris log")) } } });
   const lst = (await call(`/api/booths/${id}/commands`)).d.commands.find((c) => c.id === lg.id); assert.strictEqual(lst.result.data._big, true);
   const full = (await call(`/api/booths/${id}/commands/${lg.id}`)).d.command; assert.strictEqual(full.result.data.lines.length, 2001); assert.strictEqual((await call(`/api/booths/${id}/commands/999999`)).s, 404); ok("log besar: daftar ringkas, isi penuh diambil terpisah");
+
+  // "terapkan setelah sesi selesai": ditahan selama booth di tengah sesi, terkirim begitu kembali ke layar awal
+  await A("/api/agent/hello", { method: "POST", body: { version: "t", ui: { screen: "CAPTURE" }, settings: {}, info: {} } });
+  const wi = await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "settings.patch", payload: { "printing.copies": 3 }, whenIdle: true } }); assert.strictEqual(wi.s, 200);
+  const poll1 = A("/api/agent/poll"); const held = await Promise.race([poll1, new Promise((r) => setTimeout(() => r("tahan"), 1500))]); assert.strictEqual(held, "tahan"); ok("setelah sesi: ditahan saat booth di tengah sesi (tidak dikirim, tidak berputar)");
+  await A("/api/agent/hello", { method: "POST", body: { version: "t", ui: { screen: "WELCOME" }, settings: {}, info: {} } });
+  const rel = (await poll1).d.commands; assert.strictEqual(rel.length, 1); // poll yang sedang menunggu langsung dibangunkan assert.strictEqual(rel[0].payload.patch["printing.copies"], 3); assert.strictEqual(rel[0].payload.whenIdle, true);
+  await A("/api/agent/ack", { method: "POST", body: { id: rel[0].id, ok: true, message: "1 pengaturan diterapkan" } }); ok("setelah sesi: terkirim begitu booth kembali ke layar awal");
+  const nw = await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "settings.patch", payload: { "printing.copies": 2 } } }); await A("/api/agent/hello", { method: "POST", body: { version: "t", ui: { screen: "CAPTURE" }, settings: {}, info: {} } });
+  const imm = (await A("/api/agent/poll")).d.commands; assert.strictEqual(imm.length, 1); await A("/api/agent/ack", { method: "POST", body: { id: imm[0].id, ok: true } }); ok("tanpa opsi: tetap dikirim langsung walau ada sesi");
+  await A("/api/agent/hello", { method: "POST", body: { version: "t", ui: { screen: "WELCOME" }, settings: {}, info: {} } });
 
   // long-poll: tidak ada perintah -> menunggu; perintah masuk -> langsung terkirim
   const t1 = Date.now();

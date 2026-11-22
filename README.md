@@ -7,7 +7,10 @@ Web ringan (Node + SQLite + HTML biasa, **tanpa build**, ±1 container kecil) un
 ## Yang bisa dilakukan
 - Daftar booth: online/offline, layar yang sedang tampil, transaksi & omzet hari ini (live).
 - Kontrol: kunci/buka booth (dengan pesan di layar), batalkan sesi, muat ulang tampilan, tes koneksi.
-- **Pengaturan lengkap (158 opsi)**, dikelompokkan seperti menu Pengaturan di app photobox: Booth & Event, Alur Sesi (atur urutan langkah), Tampilan & Layar Awal, Pengingat & Izin, Sesi Foto, Kamera & Live View, Hasil Akhir, GIF/Live/Video, Cetak (termasuk kalibrasi), Pembayaran. Ada kolom cari, kolom bersyarat diredupkan, dan konfirmasi sebelum kirim.
+- **Pengaturan lengkap (162 opsi)**, dikelompokkan seperti menu Pengaturan di app photobox: Booth & Event, Alur Sesi (atur urutan langkah), Tampilan & Layar Awal, Pengingat & Izin, Sesi Foto, Kamera & Live View, Hasil Akhir, GIF/Live/Video, Cetak (termasuk kalibrasi), Pembayaran. Ada kolom cari, kolom bersyarat diredupkan, dan konfirmasi sebelum kirim.
+- **Profil kamera & jadwal siang/malam**: profil Live/Foto (ISO, shutter, aperture, WB) dan periode jam, dipilih dari opsi kamera.
+- **Terapkan setelah sesi selesai** (perubahan ditahan sampai booth di layar awal) dan hasil kirim ditampilkan (berhasil / alasan gagal).
+- **Log aplikasi** per tanggal (filter jam, level, kata; salin / unduh).
 - **Alat** (menu Tools photobox): cek penyimpanan, bersihkan arsip foto lama, bersihkan file tidak terpakai, status kamera, baca/ubah ISO-shutter-aperture-WB (Canon/Nikon langsung).
 - Transaksi lengkap per booth (filter tanggal/status/cari, sembunyikan TEST, Add Print ditandai, unduh CSV).
 - Riwayat perintah (siapa, kapan, berhasil/gagal).
