@@ -16,6 +16,7 @@ const COMMANDS = ["lock", "unlock", "cancel_session", "reload_ui", "settings.pat
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", true);
+app.use("/api/agent/ack", express.json({ limit: "2mb" })); // hasil alat (mis. log aplikasi) bisa besar
 app.use(express.json({ limit: "512kb" }));
 
 const now = () => Date.now();
@@ -170,10 +171,20 @@ app.get("/api/booths/:id/tx", admin, (req, res) => {
 });
 
 // ---------- perintah ----------
+// Daftar perintah: data hasil yang besar (mis. log) tidak ikut, cukup penanda; isinya diambil lewat /commands/:cid
 app.get("/api/booths/:id/commands", admin, (req, res) => {
   const rows = db.prepare("SELECT * FROM commands WHERE booth_id=? ORDER BY id DESC LIMIT 30").all(Number(req.params.id))
-    .map((c) => ({ ...c, payload: parse(c.payload), result: parse(c.result) }));
+    .map((c) => {
+      const result = parse(c.result);
+      if (result?.data != null) { const n = JSON.stringify(result.data).length; if (n > 4000) result.data = { _big: true, bytes: n }; }
+      return { ...c, payload: parse(c.payload), result };
+    });
   res.json({ commands: rows });
+});
+app.get("/api/booths/:id/commands/:cid", admin, (req, res) => {
+  const c = db.prepare("SELECT * FROM commands WHERE id=? AND booth_id=?").get(Number(req.params.cid), Number(req.params.id));
+  if (!c) return res.status(404).json({ error: "Perintah tidak ditemukan." });
+  res.json({ command: { ...c, payload: parse(c.payload), result: parse(c.result) } });
 });
 app.post("/api/booths/:id/commands", admin, sameOrigin, (req, res) => {
   const b = getBooth(req.params.id); if (!b) return res.status(404).json({ error: "Booth tidak ditemukan." });
@@ -220,6 +231,7 @@ function expireOld() {
   const t = now();
   db.prepare("UPDATE commands SET status='expired', done_at=? WHERE status='pending' AND created_at < ?").run(t, t - CMD_PENDING_TTL);
   db.prepare("UPDATE commands SET status='expired', done_at=? WHERE status='sent' AND sent_at < ?").run(t, t - CMD_SENT_TTL);
+  db.prepare("DELETE FROM commands WHERE created_at < ? AND status NOT IN ('pending','sent')").run(t - 14 * 86400000); // riwayat >14 hari dibuang (hasil alat seperti log bisa besar)
 }
 setInterval(expireOld, 30000).unref();
 
@@ -264,7 +276,7 @@ app.post("/api/agent/ack", agent, (req, res) => {
   const ok = !!req.body?.ok;
   // data = hasil alat (mis. ukuran penyimpanan, daftar setelan kamera); dibatasi supaya tabel perintah tidak membengkak
   let data = req.body?.data ?? null;
-  if (data != null) { const raw = JSON.stringify(data); data = raw.length <= 30000 ? data : null; }
+  if (data != null) { const raw = JSON.stringify(data); data = raw.length <= 400000 ? data : null; }
   const result = { message: s(req.body?.message, 300), applied: req.body?.applied ?? null, error: s(req.body?.error, 300), data };
   const r = db.prepare("UPDATE commands SET status=?, result=?, done_at=? WHERE id=? AND booth_id=?").run(ok ? "done" : "error", j(result), now(), id, req.booth.id);
   emit(req.booth.id, "cmd");

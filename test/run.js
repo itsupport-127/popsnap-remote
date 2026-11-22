@@ -114,8 +114,16 @@ const ok = (name) => console.log("  ✓ " + name) || n++;
   assert.strictEqual(st0.status, "done"); assert.strictEqual(st0.result.data.disk.freeGB, 120); ok("alat: hasil dari booth tersimpan dan bisa dibaca");
   await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "camera.exposure.get" } });
   const big = (await A("/api/agent/poll")).d.commands[0];
-  await A("/api/agent/ack", { method: "POST", body: { id: big.id, ok: true, data: { blob: "x".repeat(40000) } } });
+  await A("/api/agent/ack", { method: "POST", body: { id: big.id, ok: true, data: { blob: "x".repeat(450000) } } });
   assert.strictEqual((await call(`/api/booths/${id}/commands`)).d.commands.find((c) => c.id === big.id).result.data, null); ok("alat: hasil terlalu besar dibuang, perintah tetap selesai");
+  // log: hasil besar (<=400 KB) disimpan, tapi daftar hanya memuat penanda; isi penuh lewat /commands/:cid
+  assert.ok(spec.validateTool("logs.read", { date: "2026-11-22", level: "error", from: "08:00" }).ok && !spec.validateTool("logs.read", { date: "2026-13-01" }).ok && !spec.validateTool("logs.read", { tail: 10 }).ok); ok("spec: validasi log");
+  await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "logs.read", payload: { level: "bogus" } } }).then((r) => assert.strictEqual(r.s, 400));
+  await call(`/api/booths/${id}/commands`, { method: "POST", body: { type: "logs.read", payload: { q: "dslr" } } });
+  const lg = (await A("/api/agent/poll")).d.commands[0]; assert.strictEqual(lg.type, "logs.read"); assert.strictEqual(lg.payload.q, "dslr");
+  await A("/api/agent/ack", { method: "POST", body: { id: lg.id, ok: true, message: "ok", data: { date: "2026-11-22", lines: ["x".repeat(100)].concat(Array(2000).fill("2026-11-22 10:00:00.000 [I] baris log")) } } });
+  const lst = (await call(`/api/booths/${id}/commands`)).d.commands.find((c) => c.id === lg.id); assert.strictEqual(lst.result.data._big, true);
+  const full = (await call(`/api/booths/${id}/commands/${lg.id}`)).d.command; assert.strictEqual(full.result.data.lines.length, 2001); assert.strictEqual((await call(`/api/booths/${id}/commands/999999`)).s, 404); ok("log besar: daftar ringkas, isi penuh diambil terpisah");
 
   // long-poll: tidak ada perintah -> menunggu; perintah masuk -> langsung terkirim
   const t1 = Date.now();

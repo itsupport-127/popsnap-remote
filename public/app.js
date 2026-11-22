@@ -254,7 +254,7 @@ async function sendCmd(type, payload, quiet) {
   return r;
 }
 async function loadCmds() { S.cmds = (await api(`/api/booths/${S.booth.id}/commands`)).commands; }
-const CMD = { lock: "Kunci booth", unlock: "Buka kunci", cancel_session: "Batalkan sesi", reload_ui: "Muat ulang tampilan", "settings.patch": "Ubah pengaturan", ping: "Tes koneksi", "tools.storage": "Cek penyimpanan", "tools.archive_cleanup": "Bersihkan arsip lama", "tools.cleanup_orphans": "Bersihkan file tidak terpakai", "camera.status": "Status kamera", "camera.exposure.get": "Baca setelan kamera", "camera.exposure.set": "Ubah setelan kamera" };
+const CMD = { lock: "Kunci booth", unlock: "Buka kunci", cancel_session: "Batalkan sesi", reload_ui: "Muat ulang tampilan", "settings.patch": "Ubah pengaturan", ping: "Tes koneksi", "tools.storage": "Cek penyimpanan", "tools.archive_cleanup": "Bersihkan arsip lama", "tools.cleanup_orphans": "Bersihkan file tidak terpakai", "camera.status": "Status kamera", "camera.exposure.get": "Baca setelan kamera", "camera.exposure.set": "Ubah setelan kamera", "logs.read": "Ambil log aplikasi" };
 const STATUS = { pending: ["Menunggu booth", "warn"], sent: ["Diproses", "warn"], done: ["Berhasil", "ok"], error: ["Gagal", "bad"], expired: ["Kedaluwarsa", "bad"] };
 function logHtml() {
   if (!S.cmds.length) return `<div class="card empty">Belum ada perintah.</div>`;
@@ -268,6 +268,7 @@ function logHtml() {
 }
 
 // ----- alat (Tools photobox) -----
+const LG = { date: "", level: "all", from: "", to: "", q: "", tail: 400, activity: true }; // pilihan filter log (bertahan selama halaman terbuka)
 const TOOL_LAST = {}; // hasil terakhir per jenis alat (di sesi halaman ini)
 const fmtBytes = (n) => { n = Number(n) || 0; return n >= 1073741824 ? (n / 1073741824).toFixed(2) + " GB" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B"; };
 async function runTool(type, payload, label) { // kirim perintah lalu tunggu hasil dari booth (maks 60 dtk)
@@ -277,8 +278,9 @@ async function runTool(type, payload, label) { // kirim perintah lalu tunggu has
   for (let i = 0; i < 90; i++) {
     await new Promise((x) => setTimeout(x, 700));
     if (!S.booth || String(S.booth.id) !== id) return null;
-    const c = (await api(`/api/booths/${id}/commands`)).commands.find((x) => x.id === r.id);
+    let c = (await api(`/api/booths/${id}/commands`)).commands.find((x) => x.id === r.id);
     if (c && !["pending", "sent"].includes(c.status)) {
+      if (c.result?.data?._big) { try { c = (await api(`/api/booths/${id}/commands/${c.id}`)).command; } catch { /* pakai ringkasan */ } } // hasil besar (log) diambil terpisah
       TOOL_LAST[type] = c;
       toast(`${label || CMD[type] || type}: ${c.result?.error || c.result?.message || STATUS[c.status]?.[0] || c.status}`, c.status === "done" ? "ok" : "bad");
       return c;
@@ -306,6 +308,24 @@ function expHtml(info) {
     return `<div class="fld"><div class="lb"><b>${names[k]}</b></div><div class="ct"><select id="exp_${k}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(p.cur) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><button class="btn sm" data-act="exp-set" data-prop="${k}">Terapkan</button></div></div>`; }).join("");
   return rows || `<pre class="mono" style="white-space:pre-wrap">${esc(JSON.stringify(info, null, 1).slice(0, 1500))}</pre>`;
 }
+const lgColor = (ln) => (/^\S+ \S+ \[E\]/.test(ln) ? "color:#B81E36" : /^\S+ \S+ \[W\]/.test(ln) ? "color:#8a6d00" : "");
+function logText(d, name) {
+  const head = `Log aplikasi — ${name} — ${d.date}`;
+  const act = (d.activity || []).map((a) => `${a.t} ${a.user || "-"} ${a.action} ${a.target || ""} ${a.detail || ""}`.trim());
+  return [head, "", ...d.lines, ...(act.length ? ["", "--- Catatan aktivitas ---", ...act] : [])].join("\n");
+}
+function logHtml(c) {
+  const d = c?.result?.data;
+  if (c && c.status !== "done") return `<div class="banner bad">${esc(c.result?.error || "Gagal mengambil log.")}</div>`;
+  if (!d) return `<p class="mut small">Pilih tanggal lalu klik “Ambil log”. Kosongkan tanggal untuk hari ini.</p>`;
+  const chips = (d.dates || []).map((x) => `<button class="chip ${x === d.date ? "ok" : ""}" style="cursor:pointer;border:0" data-act="lg-date" data-d="${x}">${x}${x === d.today ? " (hari ini)" : ""}</button>`).join(" ");
+  const act = d.activity || [];
+  return `<div class="small mut" style="margin:6px 0">Tanggal <b>${esc(d.date)}</b> · ${d.shown} dari ${d.total} baris cocok${d.truncated ? " (dipotong: tampil yang terbaru, persempit jam atau cari kata)" : ""} · ukuran file ${fmtBytes(d.bytes)}</div>
+    <div class="row" style="margin:6px 0">${chips || '<span class="mut small">Belum ada file log.</span>'}</div>
+    ${d.lines.length ? `<div class="row" style="margin:8px 0"><button class="btn sm" data-act="lg-copy">Salin</button><button class="btn sm" data-act="lg-dl">Unduh .txt</button></div>
+    <pre class="mono" style="white-space:pre-wrap;word-break:break-word;max-height:480px;overflow:auto;background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:10px;margin:0">${d.lines.map((ln) => `<span style="${lgColor(ln)}">${esc(ln)}</span>`).join("\n")}</pre>` : `<div class="empty">Tidak ada baris log yang cocok.</div>`}
+    ${act.length ? `<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:700">Catatan aktivitas (${act.length})</summary><div class="scroll"><table><tr><th>Jam</th><th>Siapa</th><th>Aksi</th><th>Detail</th></tr>${act.map((a) => `<tr><td class="mono">${esc(a.t)}</td><td>${esc(a.user)}</td><td>${esc(a.action)}</td><td class="small">${esc((a.target + " " + a.detail).trim())}</td></tr>`).join("")}</table></div></details>` : ""}`;
+}
 function toolsHtml(b) {
   const st = TOOL_LAST["tools.storage"]?.result?.data, cam = TOOL_LAST["camera.status"]?.result?.data, ex = TOOL_LAST["camera.exposure.get"]?.result?.data;
   const info = b.info || {};
@@ -322,6 +342,15 @@ function toolsHtml(b) {
       ${cam ? `<div class="kv"><span class="mut">Penghubung</span><span>${esc(cam.driver || "-")}${cam.model ? " · " + esc(cam.model) : ""}</span></div><div class="kv"><span class="mut">Live view</span><span>${cam.live ? "menyala" : "mati"}</span></div>` : ""}
       <div class="ctl" style="margin:8px 0"><button class="btn dark" data-act="tool" data-t="camera.status">Status kamera</button><button class="btn dark" data-act="tool" data-t="camera.exposure.get">Baca setelan kamera</button></div>
       <div id="t-exp">${expHtml(ex)}</div></div></section>
+    <section class="card" style="grid-column:1/-1"><div class="ch"><h2>Log aplikasi</h2><p>Apa yang dikerjakan aplikasi dan error-nya, per tanggal (disimpan 14 hari di komputer booth). Token dan kata sandi disensor.</p></div><div class="pad">
+      <div class="ctl"><label class="small">Tanggal <input type="date" id="lg_date" value="${esc(LG.date)}"></label>
+        <label class="small">Jam <input type="time" id="lg_from" value="${esc(LG.from)}"> – <input type="time" id="lg_to" value="${esc(LG.to)}"></label>
+        <label class="small">Tampilkan <select id="lg_level"><option value="all" ${LG.level === "all" ? "selected" : ""}>Semua</option><option value="warn" ${LG.level === "warn" ? "selected" : ""}>Peringatan + error</option><option value="error" ${LG.level === "error" ? "selected" : ""}>Error saja</option></select></label>
+        <label class="small">Baris <select id="lg_tail">${[200, 400, 1000, 2000].map((n) => `<option ${LG.tail === n ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
+      <div class="ctl" style="margin-top:8px"><input type="text" id="lg_q" placeholder="Cari kata (mis. dslr, printer, error)" value="${esc(LG.q)}" maxlength="60">
+        <label class="small" style="white-space:nowrap"><input type="checkbox" id="lg_act" ${LG.activity ? "checked" : ""}> sertakan catatan aktivitas</label>
+        <button class="btn dark" data-act="lg-get">Ambil log</button><button class="btn" data-act="lg-today">Hari ini</button></div>
+      <div id="t-log" style="margin-top:6px">${logHtml(TOOL_LAST["logs.read"])}</div></div></section>
     </div>`;
 }
 
@@ -410,6 +439,19 @@ document.addEventListener("click", async (e) => {
     else if (act === "discard") { S.dirty = {}; renderTab(); updateBar(); }
     else if (act === "sec") { S.sec = el.dataset.sec; S.q = ""; const q = document.getElementById("sq"); if (q) q.value = ""; refreshSettings(); window.scrollTo(0, 0); }
     else if (act === "mv") moveStep(el.dataset.path, Number(el.dataset.i), Number(el.dataset.d));
+    else if (act === "lg-get" || act === "lg-today" || act === "lg-date") {
+      if (act === "lg-today") { const e = document.getElementById("lg_date"); if (e) e.value = ""; }
+      if (act === "lg-date") { const e = document.getElementById("lg_date"); if (e) e.value = el.dataset.d; }
+      const v = (i) => document.getElementById(i)?.value || "";
+      Object.assign(LG, { date: v("lg_date"), from: v("lg_from"), to: v("lg_to"), level: v("lg_level") || "all", tail: Number(v("lg_tail")) || 400, q: v("lg_q").trim(), activity: !!document.getElementById("lg_act")?.checked });
+      el.disabled = true;
+      try { await runTool("logs.read", { date: LG.date || undefined, level: LG.level, tail: LG.tail, from: LG.from || undefined, to: LG.to || undefined, q: LG.q, activity: LG.activity }, "Ambil log aplikasi"); } finally { if (S.tab === "alat") renderTab(); }
+    }
+    else if (act === "lg-copy" || act === "lg-dl") {
+      const d = TOOL_LAST["logs.read"]?.result?.data; if (!d) return; const txt = logText(d, S.booth.name);
+      if (act === "lg-copy") { try { await navigator.clipboard.writeText(txt); toast("Log disalin.", "ok"); } catch { toast("Tidak bisa menyalin; pakai Unduh.", "bad"); } }
+      else { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([txt], { type: "text/plain;charset=utf-8" })); a.download = `log-${S.booth.name.replace(/[^\w-]+/g, "_")}-${d.date}.txt`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+    }
     else if (act === "tool") { el.disabled = true; try { await runTool(el.dataset.t); } finally { if (S.tab === "alat") renderTab(); } }
     else if (act === "archive") { const d = Number(document.getElementById("arcdays")?.value); if (!Number.isInteger(d) || d < 7 || d > 3650) return toast("Isi batas hari antara 7 dan 3650.", "bad"); if (confirm(`Hapus SEMUA arsip foto yang lebih tua dari ${d} hari di booth ini? Tidak bisa dibatalkan.`)) { el.disabled = true; try { await runTool("tools.archive_cleanup", { days: d }); await runTool("tools.storage", { fresh: true }, "Cek penyimpanan"); } finally { if (S.tab === "alat") renderTab(); } } }
     else if (act === "exp-set") { const p = el.dataset.prop, v = document.getElementById("exp_" + p)?.value; el.disabled = true; try { const c = await runTool("camera.exposure.set", { prop: p, value: String(v) }); if (c?.status === "done") await runTool("camera.exposure.get", undefined, "Baca setelan kamera"); } finally { if (S.tab === "alat") renderTab(); } }
