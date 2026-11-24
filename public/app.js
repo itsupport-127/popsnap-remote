@@ -426,14 +426,6 @@ function storageHtml(d) {
     ${row("Cadangan database", fmtBytes(d.backups?.bytes))}${row("Pustaka", fmtBytes(d.library?.bytes))}
     ${d.retentionDays ? row("Retensi file sementara", d.retentionDays + " hari") : ""}`;
 }
-function expHtml(info) {
-  const tip = `<div class="banner warn" style="margin-bottom:8px">Perubahan di sini <b>sementara</b>, langsung ke kamera saat ini, dan bisa tertimpa profil tersimpan saat live view / foto berganti. Untuk menyimpan tetap (Live saja atau Foto saja), pakai <a href="#/booth/${S.booth?.id}/setelan">Pengaturan › Kamera › Profil Live &amp; Foto</a>.</div>`;
-  if (!info) return tip + `<p class="mut small">Klik “Baca setelan kamera” untuk memuat nilai dari kamera.</p>`;
-  const names = { tv: "Shutter", av: "Aperture", iso: "ISO", wb: "White balance" };
-  const rows = ["tv", "av", "iso", "wb"].filter((k) => info[k]).map((k) => { const p = info[k], opts = p.opts || [];
-    return `<div class="fld"><div class="lb"><b>${names[k]}</b></div><div class="ct"><select id="exp_${k}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(p.cur) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><button class="btn sm" data-act="exp-set" data-prop="${k}">Terapkan</button></div></div>`; }).join("");
-  return tip + (rows || `<pre class="mono" style="white-space:pre-wrap">${esc(JSON.stringify(info, null, 1).slice(0, 1500))}</pre>`);
-}
 const lgColor = (ln) => (/^\S+ \S+ \[E\]/.test(ln) ? "color:#B81E36" : /^\S+ \S+ \[W\]/.test(ln) ? "color:#8a6d00" : "");
 function logText(d, name) {
   const head = `Log aplikasi — ${name} — ${d.date}`;
@@ -454,7 +446,7 @@ function logHtml(c) {
     ${act.length ? `<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:700">Catatan aktivitas (${act.length})</summary><div class="scroll"><table><tr><th>Jam</th><th>Siapa</th><th>Aksi</th><th>Detail</th></tr>${act.map((a) => `<tr><td class="mono">${esc(a.t)}</td><td>${esc(a.user)}</td><td>${esc(a.action)}</td><td class="small">${esc((a.target + " " + a.detail).trim())}</td></tr>`).join("")}</table></div></details>` : ""}`;
 }
 function toolsHtml(b) {
-  const st = TOOL_LAST["tools.storage"]?.result?.data, cam = TOOL_LAST["camera.status"]?.result?.data, ex = TOOL_LAST["camera.exposure.get"]?.result?.data;
+  const st = TOOL_LAST["tools.storage"]?.result?.data, cam = TOOL_LAST["camera.status"]?.result?.data;
   const info = b.info || {};
   return `${!b.online ? `<div class="banner warn">Booth sedang offline — alat baru jalan saat booth online.</div>` : ""}
     <div class="tools">
@@ -465,10 +457,10 @@ function toolsHtml(b) {
       <p class="small mut" style="margin:8px 0 0">Tidak bisa dibatalkan. Isi 7–3650 hari.</p></div></section>
     <section class="card"><div class="ch"><h2>Bersihkan file tidak terpakai</h2><p>Menghapus sisa file di folder uploads yang tidak dipakai template, sesi, stiker, atau tampilan mana pun. File baru (&lt;15 menit) aman.</p></div><div class="pad">
       <button class="btn dark" data-act="tool" data-t="tools.cleanup_orphans">Bersihkan sekarang</button></div></section>
-    <section class="card"><div class="ch"><h2>Kamera</h2><p>Status kamera dan setelan ISO / shutter / aperture / WB (hanya mode Canon / Nikon langsung).</p></div><div class="pad">
+    <section class="card"><div class="ch"><h2>Kamera</h2><p>Cek apakah kamera terhubung dan siap.</p></div><div class="pad">
       ${cam ? `<div class="kv"><span class="mut">Penghubung</span><span>${esc(cam.driver || "-")}${cam.model ? " · " + esc(cam.model) : ""}</span></div><div class="kv"><span class="mut">Live view</span><span>${cam.live ? "menyala" : "mati"}</span></div>` : ""}
-      <div class="ctl" style="margin:8px 0"><button class="btn dark" data-act="tool" data-t="camera.status">Status kamera</button><button class="btn dark" data-act="tool" data-t="camera.exposure.get">Baca setelan kamera</button></div>
-      <div id="t-exp">${expHtml(ex)}</div></div></section>
+      <div class="ctl" style="margin:8px 0"><button class="btn dark" data-act="tool" data-t="camera.status">Cek kamera</button></div>
+      <p class="small mut" style="margin:8px 0 0">Mengubah ISO / shutter / aperture / WB (Live saja atau Foto saja): <a href="#/booth/${b.id}/setelan">Pengaturan › Kamera › Profil Live &amp; Foto</a>.</p></div></section>
     <section class="card" style="grid-column:1/-1"><div class="ch"><h2>Log aplikasi</h2><p>Apa yang dikerjakan aplikasi dan error-nya, per tanggal (disimpan 14 hari di komputer booth). Token dan kata sandi disensor.</p></div><div class="pad">
       <div class="ctl"><label class="small">Tanggal <input type="date" id="lg_date" value="${esc(LG.date)}"></label>
         <label class="small">Jam <input type="time" id="lg_from" value="${esc(LG.from)}"> – <input type="time" id="lg_to" value="${esc(LG.to)}"></label>
@@ -583,7 +575,6 @@ document.addEventListener("click", async (e) => {
     }
     else if (act === "tool") { el.disabled = true; try { await runTool(el.dataset.t); } finally { if (S.tab === "alat") renderTab(); } }
     else if (act === "archive") { const d = Number(document.getElementById("arcdays")?.value); if (!Number.isInteger(d) || d < 7 || d > 3650) return toast("Isi batas hari antara 7 dan 3650.", "bad"); if (confirm(`Hapus SEMUA arsip foto yang lebih tua dari ${d} hari di booth ini? Tidak bisa dibatalkan.`)) { el.disabled = true; try { await runTool("tools.archive_cleanup", { days: d }); await runTool("tools.storage", { fresh: true }, "Cek penyimpanan"); } finally { if (S.tab === "alat") renderTab(); } } }
-    else if (act === "exp-set") { const p = el.dataset.prop, v = document.getElementById("exp_" + p)?.value; el.disabled = true; try { const c = await runTool("camera.exposure.set", { prop: p, value: String(v) }); if (c?.status === "done") await runTool("camera.exposure.get", undefined, "Baca setelan kamera"); } finally { if (S.tab === "alat") renderTab(); } }
     else if (act === "preset") { S.txQ.preset = el.dataset.p; renderTx(true); }
     else if (act === "more") { S.txQ.limit += 50; renderTx(false); }
     else if (act === "csv") csv();
