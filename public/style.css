@@ -153,3 +153,4 @@ input[type=color]{width:46px;height:34px;border:1px solid var(--line2);border-ra
 .pcard{border:1px solid var(--line);border-radius:16px;padding:12px;background:#fff;margin-bottom:10px}
 @media (max-width:760px){.pgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .fld.off .pbox,.fld.off .steps{pointer-events:none}
+.pbox.dim .pgrid{opacity:.55}

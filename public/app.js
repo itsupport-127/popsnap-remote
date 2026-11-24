@@ -208,6 +208,7 @@ function onSettingInput(el) {
     const g = S.fields[row.dataset.fld]; if (!g?.when) return; const on = gateOk(g);
     row.classList.toggle("off", !on); const gt = row.querySelector(".gate"); if (gt) gt.textContent = on ? "" : gateText(g);
   });
+  if (f.path.startsWith("camera.exposureSchedule")) updateSchBanners();
   if (f.type === "bool") document.querySelectorAll("[data-steps]").forEach((box) => { const sf = S.fields[box.dataset.steps]; box.outerHTML = stepsHtml(sf); });
   updateBar();
   const cnt = S.spec.sections.length; if (cnt) document.querySelectorAll("#snav button").forEach((bt, i) => { const s = S.spec.sections[i], n = secDirty(s); let c = bt.querySelector(".cnt"); if (n && !c) { c = document.createElement("span"); c.className = "cnt"; bt.insertBefore(c, bt.querySelector("small")); bt.insertBefore(document.createTextNode(" "), c); } if (c) { if (n) c.textContent = n; else c.remove(); } });
@@ -295,9 +296,28 @@ function readBar() {
   const i = expInfo();
   return `<div class="row" style="margin-bottom:8px"><button class="btn sm dark" data-act="exp-read">Baca opsi dari kamera</button><span class="small mut">${i ? "Pilihan sudah dimuat dari kamera." : "Pilihan kosong sampai dibaca dari kamera (Canon / Nikon langsung, booth di layar awal)."}</span></div>`;
 }
+// Periode jadwal yang sedang aktif (menurut jam perangkat ini). null = jadwal mati / di luar periode.
+function activePeriod() {
+  if (!curVal("camera.exposureSchedule.enabled")) return null;
+  const d = new Date(), m = d.getHours() * 60 + d.getMinutes(), tm = (x) => { const a = /^(\d{1,2}):(\d{2})$/.exec(x || ""); return a ? Number(a[1]) * 60 + Number(a[2]) : null; };
+  for (const q of normPer(curVal("camera.exposureSchedule.periods"))) {
+    const a = tm(q.from), b = tm(q.to); if (a == null || b == null || a === b) continue;
+    if (a < b ? m >= a && m < b : m >= a || m < b) return q;
+  }
+  return null;
+}
+function schBanner() {
+  const q = activePeriod();
+  return q ? `<div class="banner warn schbn">Sekarang periode <b>${esc(q.label || q.from + "–" + q.to)}</b> (${esc(q.from)}–${esc(q.to)}) dari Jadwal siang / malam sedang aktif, jadi setelan kamera mengikuti jadwal itu. Profil di bawah baru dipakai di luar periode. Untuk mengubah setelan sekarang, ubah di grup “Jadwal siang / malam”.</div>` : "";
+}
+function updateSchBanners() { document.querySelectorAll("[data-schbn]").forEach((e) => { e.innerHTML = schBanner(); }); document.querySelectorAll(".pbox[data-prof-box]").forEach((e) => e.classList.toggle("dim", !!activePeriod())); }
 function profileHtml(f) {
   const v = normProf(curVal(f.path));
-  return `<div class="pbox" data-pbox="${f.path}">${readBar()}<div class="pgrid">${PKEYS.map((k) => `<label class="small"><span class="mut">${PNAMES[k]}</span>${camSel(`data-prof="${f.path}"`, k, v[k])}</label>`).join("")}</div></div>`;
+  const isLive = /\.live$/.test(f.path), isPhoto = /\.photo$/.test(f.path);
+  const who = isLive ? "Live View" : isPhoto ? "Foto" : "";
+  const other = isLive ? "Foto" : "Live View";
+  const note = who ? `<div class="small mut" style="margin-bottom:8px">Hanya mengubah <b>${who}</b>; ${other} tidak ikut berubah. Kolom “(tidak diatur)” dibiarkan seperti setelan kamera sekarang. ${isPhoto ? "Foto terlalu gelap: turunkan ISO. " : "Live View terlalu gelap: naikkan ISO. "}Kode ISO / shutter berbeda antara Windows dan Linux: baca ulang dari kamera, jangan disalin antar OS.</div>` : "";
+  return `<div class="pbox${activePeriod() ? " dim" : ""}" data-pbox="${f.path}" data-prof-box>${who ? `<div data-schbn>${schBanner()}</div>` : ""}<div class="small" style="margin-bottom:8px"><b>Tersimpan${who ? " (" + who + ")" : ""}:</b> ${esc(profSummary(v))}</div>${note}${readBar()}<div class="pgrid">${PKEYS.map((k) => `<label class="small"><span class="mut">${PNAMES[k]}</span>${camSel(`data-prof="${f.path}"`, k, v[k])}</label>`).join("")}</div></div>`;
 }
 function periodCard(f, p, i) {
   const pr = (w, val) => `<div class="pgrid">${PKEYS.map((k) => `<label class="small"><span class="mut">${PNAMES[k]}</span>${camSel(`data-per="${f.path}" data-i="${i}" data-w="${w}"`, k, val[k])}</label>`).join("")}</div>`;
@@ -315,6 +335,7 @@ function setDirtyObj(f, val) { // simpan ke S.dirty bila beda dari nilai booth
   const norm = (x) => JSON.stringify(f.type === "profile" ? normProf(x) : normPer(x));
   if (norm(val) === norm(orig)) delete S.dirty[f.path]; else S.dirty[f.path] = val;
   document.querySelector(`[data-fld="${f.path}"]`)?.classList.toggle("chg", S.dirty[f.path] !== undefined);
+  updateSchBanners();
   updateBar();
   const bt = document.querySelectorAll("#snav button"); S.spec.sections.forEach((s, i) => { const n = secDirty(s); let c = bt[i]?.querySelector(".cnt"); if (n && !c && bt[i]) { c = document.createElement("span"); c.className = "cnt"; bt[i].insertBefore(c, bt[i].querySelector("small")); } if (c) { if (n) c.textContent = n; else c.remove(); } });
 }
@@ -406,11 +427,12 @@ function storageHtml(d) {
     ${d.retentionDays ? row("Retensi file sementara", d.retentionDays + " hari") : ""}`;
 }
 function expHtml(info) {
-  if (!info) return `<p class="mut small">Klik “Baca setelan kamera” untuk memuat nilai dari kamera.</p>`;
+  const tip = `<div class="banner warn" style="margin-bottom:8px">Perubahan di sini <b>sementara</b>, langsung ke kamera saat ini, dan bisa tertimpa profil tersimpan saat live view / foto berganti. Untuk menyimpan tetap (Live saja atau Foto saja), pakai <a href="#/booth/${S.booth?.id}/setelan">Pengaturan › Kamera › Profil Live &amp; Foto</a>.</div>`;
+  if (!info) return tip + `<p class="mut small">Klik “Baca setelan kamera” untuk memuat nilai dari kamera.</p>`;
   const names = { tv: "Shutter", av: "Aperture", iso: "ISO", wb: "White balance" };
   const rows = ["tv", "av", "iso", "wb"].filter((k) => info[k]).map((k) => { const p = info[k], opts = p.opts || [];
     return `<div class="fld"><div class="lb"><b>${names[k]}</b></div><div class="ct"><select id="exp_${k}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(p.cur) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><button class="btn sm" data-act="exp-set" data-prop="${k}">Terapkan</button></div></div>`; }).join("");
-  return rows || `<pre class="mono" style="white-space:pre-wrap">${esc(JSON.stringify(info, null, 1).slice(0, 1500))}</pre>`;
+  return tip + (rows || `<pre class="mono" style="white-space:pre-wrap">${esc(JSON.stringify(info, null, 1).slice(0, 1500))}</pre>`);
 }
 const lgColor = (ln) => (/^\S+ \S+ \[E\]/.test(ln) ? "color:#B81E36" : /^\S+ \S+ \[W\]/.test(ln) ? "color:#8a6d00" : "");
 function logText(d, name) {
