@@ -154,3 +154,4 @@ input[type=color]{width:46px;height:34px;border:1px solid var(--line2);border-ra
 @media (max-width:760px){.pgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .fld.off .pbox,.fld.off .steps{pointer-events:none}
 .pbox.dim .pgrid{opacity:.55}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:640px){.grid2{grid-template-columns:1fr}}

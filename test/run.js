@@ -26,6 +26,20 @@ const ok = (name) => console.log("  ✓ " + name) || n++;
   assert.ok(!spec.validatePatch({ "printing.copies": 99 }).ok); ok("spec: di luar batas ditolak");
   assert.ok(!spec.validatePatch({ "printing.auto": "ya" }).ok); ok("spec: tipe salah ditolak");
   assert.deepStrictEqual(spec.unflatten({ "a.b.c": 1, "a.d": 2 }), { a: { b: { c: 1 }, d: 2 } }); ok("spec: unflatten");
+  // --- spec: harga template & uji coba alur penuh ---
+  assert.ok(spec.TOOL_TYPES.includes("templates.prices") && spec.TOOL_TYPES.includes("test.start") && spec.TOOL_TYPES.includes("templates.list") && spec.TOOL_TYPES.includes("test.last"));
+  assert.deepStrictEqual(spec.validateTool("templates.prices", { items: [{ id: "t1", price: "4999.6" }] }).payload, { items: [{ id: "t1", price: 5000 }] });
+  for (const bad of [{}, { items: [] }, { items: [{ id: "t1", price: -1 }] }, { items: [{ id: "t1", price: 10000001 }] }, { items: [{ price: 1 }] }, { items: [{ id: "t1", price: "x" }] }]) assert.ok(!spec.validateTool("templates.prices", bad).ok, JSON.stringify(bad));
+  assert.deepStrictEqual(spec.validateTool("test.start", {}).payload, { payment: "skip", photo: "ask", gallery: false, print: false });
+  assert.deepStrictEqual(spec.validateTool("test.start", { payment: "qris", photo: "auto", gallery: true, print: true, x: 1 }).payload, { payment: "qris", photo: "auto", gallery: true, print: true });
+  assert.ok(!spec.validateTool("test.start", { payment: "cash" }).ok && !spec.validateTool("test.start", { photo: "x" }).ok); ok("spec: harga template & uji coba divalidasi");
+  // --- spec: voucher dari Remote ---
+  assert.ok(["vouchers.create", "vouchers.list", "vouchers.void"].every((t) => spec.TOOL_TYPES.includes(t)));
+  assert.deepStrictEqual(spec.validateTool("vouchers.create", {}).payload, { count: 1, note: "" });
+  assert.deepStrictEqual(spec.validateTool("vouchers.create", { count: "3", expiryDays: "7", maxUses: 0, note: " Bu Rina " }).payload, { count: 3, note: "Bu Rina", expiryDays: 7, maxUses: 0 });
+  for (const bad of [{ count: 0 }, { count: 21 }, { count: "x" }, { expiryDays: -1 }, { expiryDays: 4000 }, { maxUses: 1000 }]) assert.ok(!spec.validateTool("vouchers.create", bad).ok, JSON.stringify(bad));
+  assert.strictEqual(spec.validateTool("vouchers.void", { code: " ab-1 " }).payload.code, "AB-1");
+  assert.ok(!spec.validateTool("vouchers.void", {}).ok); ok("spec: voucher divalidasi");
   // --- spec: cakupan baru ---
   const PRD = (a, b, l = "P") => ({ label: l + a, from: a, to: b, live: { iso: "100" }, photo: {} });
   assert.ok(spec.validatePatch({ "camera.exposure.live": { iso: "3200", tv: "", av: "5", wb: "" } }).ok && !spec.validatePatch({ "camera.exposure.live": { iso: "abc" } }).ok && !spec.validatePatch({ "camera.exposure.live": { rm: "1" } }).ok); ok("spec: profil kamera hanya kode angka, kunci terbatas");

@@ -309,7 +309,7 @@ for (const s of SECTIONS) for (const g of s.groups) for (const f of g.fields) FI
 
 // ---------- alat (perintah sekali jalan) ----------
 const CAM_PROPS = ["tv", "av", "iso", "wb"];
-const TOOL_TYPES = ["tools.storage", "tools.archive_cleanup", "tools.cleanup_orphans", "camera.status", "camera.exposure.get", "camera.exposure.set", "logs.read"];
+const TOOL_TYPES = ["tools.storage", "tools.archive_cleanup", "tools.cleanup_orphans", "camera.status", "camera.exposure.get", "camera.exposure.set", "logs.read", "templates.list", "templates.prices", "test.start", "test.last", "vouchers.create", "vouchers.list", "vouchers.void"];
 
 /** Periksa & rapikan payload perintah alat. Kembali { ok, payload, error }. */
 function validateTool(type, raw) {
@@ -317,12 +317,57 @@ function validateTool(type, raw) {
   switch (type) {
     case "tools.storage": return { ok: true, payload: { fresh: p.fresh === true } };
     case "tools.cleanup_orphans":
+    case "templates.list":
+    case "vouchers.list":
+    case "test.last":
     case "camera.status":
     case "camera.exposure.get": return { ok: true, payload: null };
     case "tools.archive_cleanup": {
       const d = Number(p.days);
       if (!Number.isInteger(d) || d < 7 || d > 3650) return { ok: false, error: "Isi batas hari antara 7 dan 3650." };
       return { ok: true, payload: { days: d } };
+    }
+    case "templates.prices": {
+      // harga template (menu Harga). Booth memeriksa ulang dan mengubah SEMUA atau TIDAK SAMA SEKALI.
+      const items = p.items;
+      if (!Array.isArray(items) || !items.length || items.length > 2000) return { ok: false, error: "Pilih 1-2000 template." };
+      const out = [];
+      for (const it of items) {
+        const price = Number(it && it.price);
+        if (!it || typeof it.id !== "string" || !it.id || it.id.length > 64) return { ok: false, error: "Ada template tanpa id." };
+        if (!Number.isFinite(price) || price < 0 || price > 10000000) return { ok: false, error: "Harga harus 0 sampai 10.000.000." };
+        out.push({ id: it.id, price: Math.round(price) });
+      }
+      return { ok: true, payload: { items: out } };
+    }
+    case "vouchers.create": {
+      // voucher gratis 1 sesi (atau lebih): jumlah 1-20, masa berlaku hari (0 = tidak kedaluwarsa, kosong = ikut pengaturan), maksimal pakai 0-999 (0 = tak terbatas)
+      const count = p.count === undefined ? 1 : Math.round(Number(p.count));
+      if (!Number.isFinite(count) || count < 1 || count > 20) return { ok: false, error: "Jumlah voucher 1 sampai 20." };
+      const out = { count, note: typeof p.note === "string" ? p.note.trim().slice(0, 100) : "" };
+      if (p.expiryDays !== undefined && p.expiryDays !== null && p.expiryDays !== "") {
+        const d = Math.round(Number(p.expiryDays));
+        if (!Number.isFinite(d) || d < 0 || d > 3650) return { ok: false, error: "Masa berlaku 0 sampai 3650 hari." };
+        out.expiryDays = d;
+      }
+      if (p.maxUses !== undefined && p.maxUses !== null && p.maxUses !== "") {
+        const m = Math.round(Number(p.maxUses));
+        if (!Number.isFinite(m) || m < 0 || m > 999) return { ok: false, error: "Maksimal pakai 0 sampai 999." };
+        out.maxUses = m;
+      }
+      return { ok: true, payload: out };
+    }
+    case "vouchers.void": {
+      const code = typeof p.code === "string" ? p.code.trim().toUpperCase() : "";
+      if (!code || code.length > 40) return { ok: false, error: "Kode voucher tidak valid." };
+      return { ok: true, payload: { code } };
+    }
+    case "test.start": {
+      // uji coba alur penuh di layar booth. Pembayaran "qris" hanya diterima booth kalau gateway Sandbox / simulasi.
+      const pay = p.payment === undefined ? "skip" : p.payment, photo = p.photo === undefined ? "ask" : p.photo;
+      if (!["skip", "qris"].includes(pay)) return { ok: false, error: "Pilihan pembayaran tidak dikenal." };
+      if (!["ask", "auto", "manual"].includes(photo)) return { ok: false, error: "Pilihan sesi foto tidak dikenal." };
+      return { ok: true, payload: { payment: pay, photo, gallery: p.gallery === true, print: p.print === true } };
     }
     case "camera.exposure.set": {
       if (!CAM_PROPS.includes(p.prop)) return { ok: false, error: "Setelan kamera tidak dikenal." };

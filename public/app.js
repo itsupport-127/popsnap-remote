@@ -103,7 +103,7 @@ function controlHtml(b) {
     ${infoHtml(b)}`;
 }
 function tabsHtml(tab) {
-  return `<div class="tabs">${[["kontrol", "Kontrol"], ["setelan", "Pengaturan"], ["alat", "Alat"], ["transaksi", "Transaksi"], ["log", "Riwayat perintah"]].map(([k, l]) => `<button class="tab ${tab === k ? "on" : ""}" data-act="tab" data-tab="${k}">${l}</button>`).join("")}</div>`;
+  return `<div class="tabs">${[["kontrol", "Kontrol"], ["setelan", "Pengaturan"], ["alat", "Alat"], ["harga", "Harga, Voucher & Uji"], ["transaksi", "Transaksi"], ["log", "Riwayat perintah"]].map(([k, l]) => `<button class="tab ${tab === k ? "on" : ""}" data-act="tab" data-tab="${k}">${l}</button>`).join("")}</div>`;
 }
 function detailShell() {
   const { id, tab } = route(); S.tab = tab;
@@ -120,6 +120,7 @@ async function renderTab() {
   if (S.tab === "kontrol") t.innerHTML = controlHtml(b);
   else if (S.tab === "setelan") t.innerHTML = settingsHtml(b);
   else if (S.tab === "alat") t.innerHTML = toolsHtml(b);
+  else if (S.tab === "harga") t.innerHTML = priceTestHtml(b);
   else if (S.tab === "log") { await loadCmds(); const t2 = document.getElementById("tabc"); if (t2 && S.tab === "log") t2.innerHTML = logHtml(); }
   else if (S.tab === "transaksi") await renderTx(true);
 }
@@ -379,7 +380,7 @@ async function sendCmd(type, payload, quiet, whenIdle) {
   return r;
 }
 async function loadCmds() { S.cmds = (await api(`/api/booths/${S.booth.id}/commands`)).commands; }
-const CMD = { lock: "Kunci booth", unlock: "Buka kunci", cancel_session: "Batalkan sesi", reload_ui: "Muat ulang tampilan", "settings.patch": "Ubah pengaturan", ping: "Tes koneksi", "tools.storage": "Cek penyimpanan", "tools.archive_cleanup": "Bersihkan arsip lama", "tools.cleanup_orphans": "Bersihkan file tidak terpakai", "camera.status": "Status kamera", "camera.exposure.get": "Baca setelan kamera", "camera.exposure.set": "Ubah setelan kamera", "logs.read": "Ambil log aplikasi" };
+const CMD = { "templates.list": "Baca daftar template", "templates.prices": "Ubah harga template", "test.start": "Uji coba alur penuh", "test.last": "Baca laporan uji coba", "vouchers.create": "Buat voucher", "vouchers.list": "Baca voucher", "vouchers.void": "Batalkan voucher", lock: "Kunci booth", unlock: "Buka kunci", cancel_session: "Batalkan sesi", reload_ui: "Muat ulang tampilan", "settings.patch": "Ubah pengaturan", ping: "Tes koneksi", "tools.storage": "Cek penyimpanan", "tools.archive_cleanup": "Bersihkan arsip lama", "tools.cleanup_orphans": "Bersihkan file tidak terpakai", "camera.status": "Status kamera", "camera.exposure.get": "Baca setelan kamera", "camera.exposure.set": "Ubah setelan kamera", "logs.read": "Ambil log aplikasi" };
 const STATUS = { pending: ["Menunggu booth", "warn"], sent: ["Diproses", "warn"], done: ["Berhasil", "ok"], error: ["Gagal", "bad"], expired: ["Kedaluwarsa", "bad"] };
 function logHtml() {
   if (!S.cmds.length) return `<div class="card empty">Belum ada perintah.</div>`;
@@ -552,6 +553,9 @@ document.addEventListener("click", async (e) => {
     else if (act === "cancel") { if (confirm("Batalkan sesi yang sedang berjalan di booth ini? Booth kembali ke layar awal.")) await sendCmd("cancel_session"); }
     else if (act === "reload") { if (confirm("Muat ulang tampilan booth? Sesi yang berjalan akan terputus.")) await sendCmd("reload_ui"); }
     else if (act === "ping") await sendCmd("ping");
+    else if (act.startsWith("vc-")) { el.disabled = true; try { await voucherAct(act, el); } finally { el.disabled = false; } }
+    else if (act.startsWith("pr-")) { el.disabled = true; try { await priceAct(act); } finally { el.disabled = false; } }
+    else if (act === "test-start" || act === "test-last") await testAct(act);
     else if (act === "rename") { const n = prompt("Nama baru booth:", b.name); if (n && n.trim()) { await api("/api/booths/" + b.id, { method: "PATCH", body: { name: n.trim() } }); await loadBooth(b.id); refreshHdr(); toast("Nama diganti.", "ok"); } }
     else if (act === "save") saveSettings();
     else if (act === "save-go") await sendSettings();
@@ -596,6 +600,135 @@ document.addEventListener("change", (e) => {
   else if (el.id === "txt") { S.txQ.hideTest = el.checked; renderTx(true); }
 });
 const debTx = debounce(() => renderTx(true), 350);
+
+
+// ----- Harga template + Uji coba alur penuh -----
+const PT = { v: { count: "1", days: "", uses: "", note: "" }, vlist: null, vnew: null, rows: null, edit: {}, sel: new Set(), q: "", opt: { payment: "skip", photo: "ask", gallery: false, print: false }, busy: false };
+const STEP_ICON = { ok: "✅", fail: "❌", skip: "⏭️", info: "ℹ️" };
+const RUN_STATUS = { passed: "Lulus semua", failed: "Ada langkah yang gagal", stopped: "Dihentikan", expired: "Waktu habis", replaced: "Diganti uji baru", running: "Sedang berjalan" };
+function priceRowsHtml() {
+  if (!PT.rows) return `<p class="mut small">Belum dimuat. Klik "Muat daftar template".</p>`;
+  const q = PT.q.trim().toLowerCase();
+  const list = PT.rows.filter((t) => !q || (t.name + " " + t.category).toLowerCase().includes(q));
+  const changed = Object.keys(PT.edit).length;
+  return `<div class="scroll"><table><thead><tr><th></th><th>Template</th><th>Status</th><th>Harga sekarang</th><th>Harga baru</th></tr></thead><tbody>${list.map((t) => {
+    const e = PT.edit[t.id];
+    return `<tr><td><input type="checkbox" data-tsel="${esc(t.id)}" ${PT.sel.has(t.id) ? "checked" : ""}></td><td>${esc(t.name)}<div class="small mut">${esc(t.category)}</div></td><td><span class="chip ${t.live ? "ok" : ""}">${t.live ? "Live" : "Draft"}</span></td><td>${rp(t.price)}</td>
+      <td><input type="text" inputmode="numeric" data-tprice="${esc(t.id)}" value="${e !== undefined ? esc(e) : ""}" placeholder="${t.price}" style="width:110px"></td></tr>`;
+  }).join("")}</tbody></table></div>
+  <div class="ctl" style="margin-top:10px"><button class="btn dark" data-act="pr-save" ${changed ? "" : "disabled"}>Simpan ${changed} perubahan ke booth</button><button class="btn" data-act="pr-discard" ${changed ? "" : "disabled"}>Buang perubahan</button></div>`;
+}
+function testReportHtml() {
+  const last = TOOL_LAST["test.last"]?.result?.data?.last || TOOL_LAST["test.start"]?.result?.data?.run;
+  if (!last) return `<p class="mut small">Belum ada laporan. Klik "Baca laporan terakhir".</p>`;
+  return `<div class="small" style="margin-bottom:6px"><b>${esc(RUN_STATUS[last.status] || last.status)}</b> · ${fmtDT(last.startedAt)} · ${esc(last.by || "")}</div><div class="scroll"><table><tbody>${(last.steps || []).map((x) =>
+    `<tr><td>${STEP_ICON[x.status] || "•"}</td><td>${esc(x.label)}${x.detail ? `<div class="small ${x.status === "fail" ? "" : "mut"}" ${x.status === "fail" ? 'style="color:var(--red-d)"' : ""}>${esc(x.detail)}</div>` : ""}</td><td class="small mut">${x.ms >= 1000 ? (x.ms / 1000).toFixed(1) + " dtk" : x.ms + " ms"}</td></tr>`).join("") || `<tr><td class="mut small">Belum ada langkah tercatat.</td></tr>`}</tbody></table></div>`;
+}
+function priceTestHtml(b) {
+  const o = PT.opt, rad = (k, v, l) => `<label class="small" style="display:block;margin:4px 0"><input type="radio" name="o_${k}" data-topt="${k}" value="${v}" ${o[k] === v ? "checked" : ""}> ${l}</label>`;
+  return `${!b.online ? `<div class="banner warn">Booth sedang offline — perintah baru jalan saat booth online.</div>` : ""}
+  <section class="card"><div class="ch"><h2>Harga template</h2><p>Ubah harga satu per satu atau banyak sekaligus. Berlaku untuk tamu berikutnya; semua berubah atau tidak sama sekali.</p></div><div class="pad">
+    <div class="ctl"><button class="btn dark" data-act="pr-load">Muat daftar template</button><input type="search" id="prq" placeholder="Cari template…" value="${esc(PT.q)}" style="max-width:220px"></div>
+    <div class="ctl" style="margin-top:10px;flex-wrap:wrap">
+      <span class="small mut">Untuk yang dicentang:</span>
+      <input type="text" inputmode="numeric" id="prv" placeholder="Nilai" style="width:90px">
+      <button class="btn" data-act="pr-set">Set harga</button><button class="btn" data-act="pr-rp-up">+ Rp</button><button class="btn" data-act="pr-rp-down">− Rp</button><button class="btn" data-act="pr-pct-up">+ %</button><button class="btn" data-act="pr-pct-down">− %</button><button class="btn" data-act="pr-free">Gratiskan</button>
+      <button class="btn" data-act="pr-all">Centang semua</button><button class="btn" data-act="pr-live">Centang yang Live</button><button class="btn" data-act="pr-none">Kosongkan centang</button>
+    </div>
+    <div id="prtable" style="margin-top:10px">${priceRowsHtml()}</div></div></section>
+  <section class="card" style="margin-top:14px"><div class="ch"><h2>Uji coba alur penuh</h2><p>Booth menjalankan sendiri alur tamu (kamera asli) dari layar awal sampai hasil akhir, lalu melapor lulus / gagal per langkah. Data uji tidak masuk kasir / laporan.</p></div><div class="pad">
+    <div class="grid2"><div><b class="small">Pembayaran</b>${rad("payment", "skip", "Lewati (gratis)")}${rad("payment", "qris", "QRIS sandbox / simulasi (ditolak booth kalau uang asli)")}</div>
+    <div><b class="small">Sesi foto</b>${rad("photo", "ask", "Tanya orang di booth saat sesi foto")}${rad("photo", "auto", "Otomatis")}${rad("photo", "manual", "Manual (orang di booth memotret)")}</div></div>
+    <label class="small" style="display:block;margin:8px 0 2px"><input type="checkbox" data-topt="print" ${o.print ? "checked" : ""}> Cetak 1 lembar ke printer (kertas & tinta terpakai)</label>
+    <label class="small" style="display:block;margin:2px 0"><input type="checkbox" data-topt="gallery" ${o.gallery ? "checked" : ""}> Unggah ke galeri online (nomor transaksi UJICOBA-…)</label>
+    <p class="mut small">Hanya jalan kalau layar kiosk terbuka dan tidak ada tamu. Tombol "Hentikan uji" ada di pita oranye layar booth.</p>
+    <div class="ctl"><button class="btn dark" data-act="test-start" ${PT.busy ? "disabled" : ""}>Mulai uji coba di booth</button><button class="btn" data-act="test-last">Baca laporan terakhir</button></div>
+    <div id="trep" style="margin-top:10px">${testReportHtml()}</div></div></section>${voucherCardHtml()}`;
+}
+function prNum() { const v = Number(String(document.getElementById("prv")?.value || "").replace(/[^\d.]/g, "")); return Number.isFinite(v) && v >= 0 ? v : null; }
+function prApply(fn) {
+  if (!PT.rows) return toast("Muat daftar template dulu.", "bad");
+  if (!PT.sel.size) return toast("Centang template yang mau diubah.", "bad");
+  for (const t of PT.rows) if (PT.sel.has(t.id)) { const cur = PT.edit[t.id] !== undefined && PT.edit[t.id] !== "" ? Number(PT.edit[t.id]) : t.price; const n = Math.max(0, Math.min(10000000, Math.round(fn(cur)))); if (n === t.price) delete PT.edit[t.id]; else PT.edit[t.id] = String(n); }
+  const e = document.getElementById("prtable"); if (e) e.innerHTML = priceRowsHtml();
+}
+async function priceAct(act) {
+  if (act === "pr-load") { const c = await runTool("templates.list", null, "Baca template"); if (c?.status === "done") { PT.rows = c.result?.data?.templates || []; PT.edit = {}; PT.sel = new Set(); } }
+  else if (act === "pr-save") {
+    const items = Object.entries(PT.edit).filter(([, v]) => v !== "" && Number.isFinite(Number(v))).map(([id, v]) => ({ id, price: Number(v) }));
+    if (!items.length) return;
+    if (!confirm(`Ubah harga ${items.length} template di booth ini?`)) return;
+    const c = await runTool("templates.prices", { items }, "Ubah harga");
+    if (c?.status === "done") { const r = await runTool("templates.list", null, "Baca template"); if (r?.status === "done") { PT.rows = r.result?.data?.templates || []; PT.edit = {}; PT.sel = new Set(); } }
+  }
+  else if (act === "pr-discard") PT.edit = {};
+  else if (act === "pr-all") PT.sel = new Set((PT.rows || []).map((t) => t.id));
+  else if (act === "pr-live") PT.sel = new Set((PT.rows || []).filter((t) => t.live).map((t) => t.id));
+  else if (act === "pr-none") PT.sel = new Set();
+  else if (act === "pr-free") return prApply(() => 0);
+  else if (act === "pr-set") { const n = prNum(); if (n == null) return toast("Isi nilai harga.", "bad"); return prApply(() => n); }
+  else if (act === "pr-rp-up" || act === "pr-rp-down") { const n = prNum(); if (n == null) return toast("Isi nilai Rp.", "bad"); return prApply((c) => c + (act === "pr-rp-up" ? n : -n)); }
+  else if (act === "pr-pct-up" || act === "pr-pct-down") { const n = prNum(); if (n == null) return toast("Isi nilai persen.", "bad"); return prApply((c) => Math.round((c * (1 + (act === "pr-pct-up" ? n : -n) / 100)) / 500) * 500); }
+  if (S.tab === "harga") renderTab();
+}
+function voucherCardHtml() {
+  return `<section class="card" style="margin-top:14px"><div class="ch"><h2>Voucher</h2><p>Buat kode voucher gratis untuk tamu dari jauh. Kode langsung bisa dipakai di booth dan tercatat di log aktivitas sebagai "remote".</p></div><div class="pad">
+    <div class="ctl" style="flex-wrap:wrap">
+      <label class="small">Jumlah <input type="text" inputmode="numeric" data-vf="count" value="${esc(PT.v.count)}" style="width:60px"></label>
+      <label class="small">Berlaku (hari) <input type="text" inputmode="numeric" data-vf="days" value="${esc(PT.v.days)}" placeholder="ikut pengaturan" style="width:120px"></label>
+      <label class="small">Maks. dipakai <input type="text" inputmode="numeric" data-vf="uses" value="${esc(PT.v.uses)}" placeholder="1" style="width:70px"></label>
+      <label class="small">Catatan <input type="text" data-vf="note" value="${esc(PT.v.note)}" maxlength="100" placeholder="mis. untuk Bu Rina" style="width:180px"></label>
+      <button class="btn dark" data-act="vc-create">Buat voucher</button><button class="btn" data-act="vc-list">Muat daftar voucher</button>
+    </div>
+    <p class="mut small">Kosongkan "Berlaku" untuk mengikuti pengaturan booth; 0 = tidak kedaluwarsa. "Maks. dipakai" 0 = tanpa batas.</p>
+    <div style="margin-top:8px">${voucherHtml()}</div></div></section>`;
+}
+const V_STATUS = { active: "Aktif", used: "Terpakai", voided: "Dibatalkan", expired: "Kedaluwarsa" };
+function voucherHtml() {
+  const mk = PT.vnew;
+  const made = mk ? `<div class="banner ok"><b>Voucher baru:</b> <span class="mono">${mk.codes.map(esc).join(" , ")}</span><div class="small">${mk.expiresAt ? "Berlaku sampai " + fmtDT(mk.expiresAt) : "Tidak kedaluwarsa"}, dipakai maks. ${mk.maxUses ? mk.maxUses + "x" : "tanpa batas"}</div><button class="btn" data-act="vc-copy">Salin kode</button></div>` : "";
+  if (!PT.vlist) return made + `<p class="mut small">Klik "Muat daftar voucher" untuk melihat 30 voucher terakhir.</p>`;
+  const rows = PT.vlist.map((v) => `<tr><td class="mono">${esc(v.code)}</td><td><span class="chip ${v.status === "active" ? "ok" : ""}">${esc(V_STATUS[v.status] || v.status)}</span>${v.maxUses !== 1 ? `<div class="small mut">${v.useCount}/${v.maxUses || "tanpa batas"}</div>` : ""}</td><td class="small">${fmtDT(v.createdAt)}<div class="mut">${esc(v.createdBy || "")}</div></td><td class="small">${esc(v.note || "")}</td><td>${v.status === "active" ? `<button class="btn" data-act="vc-void" data-code="${esc(v.code)}">Batalkan</button>` : ""}</td></tr>`).join("");
+  return made + `<div class="scroll"><table><thead><tr><th>Kode</th><th>Status</th><th>Dibuat</th><th>Catatan</th><th></th></tr></thead><tbody>${rows || `<tr><td class="mut small">Belum ada voucher.</td></tr>`}</tbody></table></div>`;
+}
+async function voucherAct(act, el) {
+  const v = PT.v;
+  const reload = async () => { const l = await runTool("vouchers.list", null, "Baca voucher"); if (l?.status === "done") PT.vlist = l.result?.data?.vouchers || []; };
+  if (act === "vc-copy") { try { await navigator.clipboard.writeText(PT.vnew.codes.join("\n")); toast("Kode disalin", "ok"); } catch { toast("Tidak bisa menyalin, salin manual.", "bad"); } return; }
+  if (act === "vc-create") {
+    const p = { count: Number(v.count) || 1, note: v.note };
+    if (v.days.trim() !== "") p.expiryDays = Number(v.days);
+    if (v.uses.trim() !== "") p.maxUses = Number(v.uses);
+    const c = await runTool("vouchers.create", p, "Buat voucher");
+    if (c?.status === "done" && c.result?.data) { PT.vnew = c.result.data; await reload(); }
+  } else if (act === "vc-list") await reload();
+  else if (act === "vc-void") {
+    if (!confirm(`Batalkan voucher ${el.dataset.code}?`)) return;
+    const c = await runTool("vouchers.void", { code: el.dataset.code }, "Batalkan voucher");
+    if (c?.status === "done") await reload();
+  }
+  if (S.tab === "harga") renderTab();
+}
+
+async function testAct(act) {
+  if (act === "test-start") {
+    if (!confirm("Mulai uji coba di booth ini? Layar booth akan menjalankan satu sesi uji. Pastikan tidak ada tamu.")) return;
+    PT.busy = true; renderTab();
+    try { await runTool("test.start", { ...PT.opt }, "Uji coba"); } finally { PT.busy = false; }
+  } else await runTool("test.last", null, "Laporan uji");
+  if (S.tab === "harga") renderTab();
+}
+document.addEventListener("input", (e) => {
+  const el = e.target;
+  if (el.dataset?.vf) PT.v[el.dataset.vf] = el.value;
+  else if (el.dataset?.tprice) { const v = el.value.replace(/[^\d]/g, ""); if (v === "") delete PT.edit[el.dataset.tprice]; else PT.edit[el.dataset.tprice] = v; const b = document.querySelector('[data-act="pr-save"]'); if (b) { const n = Object.keys(PT.edit).length; b.disabled = !n; b.textContent = `Simpan ${n} perubahan ke booth`; } }
+  else if (el.id === "prq") { PT.q = el.value; const t = document.getElementById("prtable"); if (t) t.innerHTML = priceRowsHtml(); }
+});
+document.addEventListener("change", (e) => {
+  const el = e.target;
+  if (el.dataset?.tsel) { if (el.checked) PT.sel.add(el.dataset.tsel); else PT.sel.delete(el.dataset.tsel); }
+  else if (el.dataset?.topt) PT.opt[el.dataset.topt] = el.type === "checkbox" ? el.checked : el.value;
+});
 
 // ---------- live (SSE) + siklus ----------
 function closeES() { if (S.es) { S.es.close(); S.es = null; } }
